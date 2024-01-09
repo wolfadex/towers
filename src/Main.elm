@@ -1,8 +1,11 @@
 module Main exposing (main)
 
+import Basics.Extra
 import Browser
+import Browser.Events
 import Circle2d
 import Dict exposing (Dict)
+import Duration exposing (Duration)
 import Ecs
 import Ecs.Component
 import Ecs.Config
@@ -16,15 +19,16 @@ import Html.Events
 import Length
 import Pixels exposing (Pixels)
 import Point2d exposing (Point2d)
-import Polyline2d
+import Polyline2d exposing (Polyline2d)
 import Quantity exposing (Quantity)
 import Random
 import Random.List
 import Svg exposing (Svg)
 import Svg.Attributes
+import Time
 
 
-main : Program () Model Msg
+main : Program Flags Model Msg
 main =
     Browser.document
         { init = init
@@ -34,15 +38,33 @@ main =
         }
 
 
+type alias Flags =
+    Int
+
+
+
+-----------
+-- MODEL --
+-----------
+
+
 type alias Model =
     { tilemap : Hex.Map (Maybe Ecs.Entity)
     , cameraPosition : Point2d Pixels ScreenCoordinates
     , seed : Random.Seed
+    , lastTimestamp : Time.Posix
 
     -- ECS
     , ecsConfig : Ecs.Config
     , colorComponent : Ecs.Component String
     , positionComponent : Ecs.Component Hex
+    , healthComponent : Ecs.Component Health
+    , pathComponent :
+        Ecs.Component
+            { path : List Hex
+            , distance : Float
+            , point : Point2d Pixels WorldCoordinates
+            }
     }
 
 
@@ -75,8 +97,40 @@ positionSpec =
     }
 
 
-init : () -> ( Model, Cmd Msg )
-init _ =
+type alias Health =
+    { current : Int
+    , max : Int
+    }
+
+
+healthSpec : Ecs.Component.Spec Health Model
+healthSpec =
+    { get = .healthComponent
+    , set = \healthComponent world -> { world | healthComponent = healthComponent }
+    }
+
+
+pathSpec :
+    Ecs.Component.Spec
+        { path : List Hex
+        , distance : Float
+        , point : Point2d Pixels WorldCoordinates
+        }
+        Model
+pathSpec =
+    { get = .pathComponent
+    , set = \pathComponent world -> { world | pathComponent = pathComponent }
+    }
+
+
+
+----------
+-- INIT --
+----------
+
+
+init : Flags -> ( Model, Cmd Msg )
+init currentTime =
     let
         tilemap =
             { q = 0, r = 0, s = 0 }
@@ -91,51 +145,190 @@ init _ =
     ( { tilemap = tilemap
       , cameraPosition = Point2d.origin
       , seed = Random.initialSeed 0
+      , lastTimestamp = Time.millisToPosix currentTime
 
       -- ECS
       , ecsConfig = Ecs.Config.init
       , colorComponent = Ecs.Component.empty
       , positionComponent = Ecs.Component.empty
+      , healthComponent = Ecs.Component.empty
+      , pathComponent = Ecs.Component.empty
       }
-      -- |> Ecs.Entity.create ecsConfigSpec
-      -- |> Ecs.Entity.with ( colorSpec, "red" )
-      -- |> Ecs.Entity.with
-      --     ( positionSpec
-      --     , { q = 0, r = 0, s = 0 }
-      --         |> Hex.fromQRSInt
-      --         |> Hex.neighbor Hex.NorthWest
-      --         |> Hex.neighbor Hex.NorthWest
-      --         |> Hex.neighbor Hex.West
-      --         |> Hex.neighbor Hex.West
-      --         |> Hex.neighbor Hex.West
-      --     )
-      -- |> Tuple.second
-      -- |> Ecs.Entity.create ecsConfigSpec
-      -- |> Ecs.Entity.with ( colorSpec, "cornflowerblue" )
-      -- |> Ecs.Entity.with
-      --     ( positionSpec
-      --     , { q = 0, r = 0, s = 0 }
-      --         |> Hex.fromQRSInt
-      --     )
-      -- |> Tuple.second
+        |> createEnemy
+        |> createEnemy
+        |> Ecs.Entity.create ecsConfigSpec
+        |> Ecs.Entity.with ( colorSpec, "cornflowerblue" )
+        |> Ecs.Entity.with
+            ( positionSpec
+            , { q = 0, r = 0, s = 0 }
+                |> Hex.fromQRSInt
+            )
+        |> Tuple.second
     , Cmd.none
     )
 
 
+createEnemy : Model -> Model
+createEnemy model =
+    let
+        edgeHexes : List Hex
+        edgeHexes =
+            model.tilemap
+                |> Dict.values
+                |> List.filterMap
+                    (\( hex, _ ) ->
+                        let
+                            nbrs =
+                                hex
+                                    |> Hex.neighbors
+                                    |> List.filterMap
+                                        (\neighbor ->
+                                            Dict.get
+                                                (Hex.toKey neighbor)
+                                                model.tilemap
+                                        )
+                                    |> List.length
+                        in
+                        if nbrs < 6 then
+                            Just hex
+
+                        else
+                            Nothing
+                    )
+
+        ( maybeHex, nextSeed ) =
+            Random.step
+                (edgeHexes
+                    |> Random.List.choose
+                    |> Random.map Tuple.first
+                )
+                model.seed
+    in
+    case maybeHex of
+        Nothing ->
+            { model | seed = nextSeed }
+
+        Just hex ->
+            { model | seed = nextSeed }
+                |> Ecs.Entity.create ecsConfigSpec
+                |> Ecs.Entity.with ( colorSpec, "red" )
+                |> Ecs.Entity.with ( healthSpec, { current = 10, max = 10 } )
+                |> Ecs.Entity.with ( positionSpec, hex )
+                |> Ecs.Entity.with
+                    ( pathSpec
+                    , { path =
+                            Hex.drawLine
+                                hex
+                                (Hex.fromQRSInt { q = 0, r = 0, s = 0 })
+                      , distance = 0
+                      , point = Hex.toPoint2d hexMapLayout hex
+                      }
+                    )
+                |> Tuple.second
+
+
 subscriptions : Model -> Sub Msg
 subscriptions model =
-    Sub.none
+    Browser.Events.onAnimationFrame Tick
+
+
+
+------------
+-- UPDATE --
+------------
 
 
 type Msg
-    = NoOp
+    = Tick Time.Posix
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        NoOp ->
-            ( model, Cmd.none )
+        Tick currentTimestamp ->
+            let
+                deltaTime : Duration
+                deltaTime =
+                    (Time.posixToMillis currentTimestamp - Time.posixToMillis model.lastTimestamp)
+                        |> toFloat
+                        |> Duration.milliseconds
+            in
+            ( { model
+                | lastTimestamp = currentTimestamp
+              }
+                |> moveEnemy deltaTime
+            , Cmd.none
+            )
+
+
+moveEnemy : Duration -> Model -> Model
+moveEnemy deltaTime =
+    Ecs.System.map2
+        (\( position, setPosition ) ( { path, distance, point }, setPath ) ->
+            let
+                deltaSeconds =
+                    Duration.inSeconds deltaTime
+
+                totalDistance =
+                    distance + deltaSeconds
+
+                tilesToDrop =
+                    floor totalDistance
+
+                remainingPath =
+                    path
+                        |> List.drop tilesToDrop
+            in
+            case remainingPath of
+                [] ->
+                    position
+                        |> setPosition
+
+                [ _ ] ->
+                    position
+                        |> setPosition
+
+                currentHex :: nextHex :: _ ->
+                    let
+                        nextDistance =
+                            totalDistance
+                                |> Basics.Extra.fractionalModBy 1.0
+
+                        pointAlong : Point2d Pixels WorldCoordinates
+                        pointAlong =
+                            Point2d.interpolateFrom
+                                (Hex.toPoint2d hexMapLayout currentHex)
+                                (Hex.toPoint2d hexMapLayout nextHex)
+                                nextDistance
+                    in
+                    { path = remainingPath
+                    , distance = nextDistance
+                    , point = pointAlong
+                    }
+                        |> setPath
+        )
+        positionSpec
+        pathSpec
+
+
+enemyPath : Model -> List (Polyline2d Pixels WorldCoordinates)
+enemyPath model =
+    Ecs.System.foldl2
+        (\position color acc ->
+            (position
+                |> Hex.drawLine (Hex.fromQRSInt { q = 0, r = 0, s = 0 })
+                |> List.map
+                    (\point ->
+                        point
+                            |> Hex.toPoint2d hexMapLayout
+                    )
+                |> Polyline2d.fromVertices
+            )
+                :: acc
+        )
+        model.positionComponent
+        model.colorComponent
+        []
 
 
 
@@ -207,41 +400,28 @@ view model =
 
 highlightPath : Model -> List (Svg Msg)
 highlightPath model =
-    Ecs.System.foldl2
-        (\position color acc ->
-            (position
-                |> Hex.drawLine (Hex.fromQRSInt { q = 0, r = 0, s = 0 })
-                |> List.map
-                    (\point ->
-                        point
-                            |> Hex.toPoint2d hexMapLayout
-                    )
-                |> Polyline2d.fromVertices
-                |> Geometry.Svg.polyline2d
-                    [ Svg.Attributes.stroke "orange"
-                    , Svg.Attributes.strokeWidth "5"
-                    , Svg.Attributes.fill "none"
-                    ]
+    model
+        |> enemyPath
+        |> List.map
+            (Geometry.Svg.polyline2d
+                [ Svg.Attributes.stroke "orange"
+                , Svg.Attributes.strokeWidth "5"
+                , Svg.Attributes.fill "none"
+                ]
             )
-                :: acc
-        )
-        model.positionComponent
-        model.colorComponent
-        []
 
 
 viewCells : Quantity Float (Quantity.Rate Pixels Length.Meters) -> Model -> List (Svg Msg)
 viewCells resolution model =
     Ecs.System.foldl2
-        (\position color acc ->
-            (position
-                |> Hex.toPoint2d hexMapLayout
+        (\{ point } color acc ->
+            (point
                 |> Circle2d.withRadius (Pixels.pixels 15)
                 |> Geometry.Svg.circle2d [ Svg.Attributes.fill color ]
             )
                 :: acc
         )
-        model.positionComponent
+        model.pathComponent
         model.colorComponent
         []
 
@@ -265,35 +445,11 @@ viewHexGridMap hexMap =
 
         toPolygon : Hex -> String -> List (Svg Msg)
         toPolygon hex cornersCoords =
-            -- let
-            --     coords =
-            --         hex
-            --             |> Hex.toQRSInt
-            --     carlCell =
-            --         carlHex
-            --             |> Hex.toQRSInt
-            --     eastCell =
-            --         carlHex
-            --             |> Hex.neighbor Hex.East
-            --             |> Hex.toQRSInt
-            --     westCell =
-            --         carlHex
-            --             |> Hex.neighbor Hex.West
-            --             |> Hex.toQRSInt
-            -- in
             [ Svg.polygon
                 [ Svg.Attributes.style "cursor: pointer"
                 , Svg.Attributes.stroke "#ffff00"
                 , Svg.Attributes.strokeWidth "1px"
-                , Svg.Attributes.fill <|
-                    -- if coords.q == carlCell.q && coords.r == carlCell.r && coords.s == carlCell.s then
-                    --     "#0F8AD2"
-                    -- else if coords.q == eastCell.q && coords.r == eastCell.r && coords.s == eastCell.s then
-                    --     "#5FE033"
-                    -- else if coords.q == westCell.q && coords.r == westCell.r && coords.s == westCell.s then
-                    --     "#990099"
-                    -- else
-                    "#777777"
+                , Svg.Attributes.fill "#777777"
                 , Svg.Attributes.points cornersCoords
                 ]
                 []

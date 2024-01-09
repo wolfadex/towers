@@ -11,7 +11,19 @@
     <body>
         <script src="elm.js"></script>
         <script>
-            Elm.Main.init();
+            // BEGIN - Extend basic JS objects
+            if (!Event.prototype.hasOwnProperty("__currentTime")) {
+                Object.defineProperty(Event.prototype, "__currentTime", {
+                    get: function () {
+                        return Date.now();
+                    },
+                });
+            }
+            // END - Extend basic JS objects
+
+            Elm.Main.init({
+                flags: Date.now(),
+            });
         </script>
     </body>
 </html>

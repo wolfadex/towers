@@ -6,7 +6,7 @@ module Hex exposing
     , similar, dissimilar
     , plus, minus, multiplyBy
     , length, distance
-    , direction, neighbor
+    , direction, neighbor, neighbors
     , Layout, Orientation
     , flatOrientation, pointyOrientation
     , drawLine
@@ -52,7 +52,7 @@ Forked from <https://github.com/Voronchuk/hexagons>
 
 # Neighbors
 
-@docs direction, neighbor
+@docs direction, neighbor, neighbors
 
 #Layout
 
@@ -710,6 +710,13 @@ direction dir =
 neighbor : Direction -> Hex -> Hex
 neighbor dir hex =
     plus hex <| direction dir
+
+
+{-| The immediate neighbors of a hex
+-}
+neighbors : Hex -> List Hex
+neighbors hex =
+    ring 1 hex
 
 
 
