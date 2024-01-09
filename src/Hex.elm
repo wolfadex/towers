@@ -1,5 +1,5 @@
 module Hex exposing
-    ( Hex, Direction(..)
+    ( Hex, Direction(..), Key
     , toQ, toQInt, toR, toRInt, toS, toSInt
     , toQRS, toQRSInt, fromQRSInt
     , fromInt, fromFloat, toIntCoordinates, toFloatCoordinates
@@ -7,7 +7,7 @@ module Hex exposing
     , plus, minus, multiplyBy
     , length, distance
     , direction, neighbor, neighbors
-    , Layout, Orientation
+    , Layout, Orientation, Square2Matrix
     , flatOrientation, pointyOrientation
     , drawLine
     , fromPoint2d, toPoint2d
@@ -25,7 +25,7 @@ Forked from <https://github.com/Voronchuk/hexagons>
 
 # Types
 
-@docs Hex, Direction
+@docs Hex, Direction, Key
 
 
 # Helpers
@@ -56,7 +56,7 @@ Forked from <https://github.com/Voronchuk/hexagons>
 
 #Layout
 
-@docs Layout, Orientation
+@docs Layout, Orientation, Square2Matrix
 @docs flatOrientation, pointyOrientation
 
 @docs drawLine
@@ -133,13 +133,13 @@ type Direction
 toQ : Hex -> Float
 toQ a =
     case a of
-        AxialHex ( a1, a2 ) ->
+        AxialHex ( a1, _ ) ->
             toFloat a1
 
-        IntCubeHex ( a1, a2, a3 ) ->
+        IntCubeHex ( a1, _, _ ) ->
             toFloat a1
 
-        FloatCubeHex ( a1, a2, a3 ) ->
+        FloatCubeHex ( a1, _, _ ) ->
             a1
 
 
@@ -151,13 +151,13 @@ toQ a =
 toQInt : Hex -> Int
 toQInt a =
     case a of
-        AxialHex ( a1, a2 ) ->
+        AxialHex ( a1, _ ) ->
             a1
 
-        IntCubeHex ( a1, a2, a3 ) ->
+        IntCubeHex ( a1, _, _ ) ->
             a1
 
-        FloatCubeHex ( a1, a2, a3 ) ->
+        FloatCubeHex ( a1, _, _ ) ->
             floor a1
 
 
@@ -169,13 +169,13 @@ toQInt a =
 toR : Hex -> Float
 toR a =
     case a of
-        AxialHex ( a1, a2 ) ->
+        AxialHex ( _, a2 ) ->
             toFloat a2
 
-        IntCubeHex ( a1, a2, a3 ) ->
+        IntCubeHex ( _, a2, _ ) ->
             toFloat a2
 
-        FloatCubeHex ( a1, a2, a3 ) ->
+        FloatCubeHex ( _, a2, _ ) ->
             a2
 
 
@@ -187,13 +187,13 @@ toR a =
 toRInt : Hex -> Int
 toRInt a =
     case a of
-        AxialHex ( a1, a2 ) ->
+        AxialHex ( _, a2 ) ->
             a2
 
-        IntCubeHex ( a1, a2, a3 ) ->
+        IntCubeHex ( _, a2, _ ) ->
             a2
 
-        FloatCubeHex ( a1, a2, a3 ) ->
+        FloatCubeHex ( _, a2, _ ) ->
             floor a2
 
 
@@ -208,10 +208,10 @@ toS a =
         AxialHex ( a1, a2 ) ->
             toFloat (-a1 - a2)
 
-        IntCubeHex ( a1, a2, a3 ) ->
+        IntCubeHex ( _, _, a3 ) ->
             toFloat a3
 
-        FloatCubeHex ( a1, a2, a3 ) ->
+        FloatCubeHex ( _, _, a3 ) ->
             a3
 
 
@@ -226,10 +226,10 @@ toSInt a =
         AxialHex ( a1, a2 ) ->
             -a1 - a2
 
-        IntCubeHex ( a1, a2, a3 ) ->
+        IntCubeHex ( _, _, a3 ) ->
             a3
 
-        FloatCubeHex ( a1, a2, a3 ) ->
+        FloatCubeHex ( _, _, a3 ) ->
             floor a3
 
 
@@ -289,7 +289,7 @@ toIntCoordinates hex =
         AxialHex ( q1, r1 ) ->
             IntCubeHex ( q1, r1, -q1 - r1 )
 
-        IntCubeHex ( q_, r_, s_ ) ->
+        IntCubeHex _ ->
             hex
 
         FloatCubeHex ( q_, r_, s_ ) ->
@@ -308,18 +308,20 @@ toIntCoordinates hex =
 
                 r_diff =
                     abs (toFloat r1 - r_)
-
-                s_diff =
-                    abs (toFloat s1 - s_)
             in
-            if q_diff > r_diff && q_diff > r_diff then
+            if q_diff > r_diff then
                 IntCubeHex ( -r1 - s1, r1, s1 )
 
-            else if r_diff > s_diff then
-                IntCubeHex ( q1, -q1 - s1, s1 )
-
             else
-                IntCubeHex ( q1, r1, -q1 - r1 )
+                let
+                    s_diff =
+                        abs (toFloat s1 - s_)
+                in
+                if r_diff > s_diff then
+                    IntCubeHex ( q1, -q1 - s1, s1 )
+
+                else
+                    IntCubeHex ( q1, r1, -q1 - r1 )
 
 
 {-| Convert Hex to FloatCubeHex coordinate systems
@@ -345,7 +347,7 @@ toFloatCoordinates hex =
         IntCubeHex ( q1, r1, s1 ) ->
             FloatCubeHex ( toFloat q1, toFloat r1, toFloat s1 )
 
-        FloatCubeHex ( q_, r_, s_ ) ->
+        FloatCubeHex _ ->
             hex
 
 
@@ -371,7 +373,7 @@ similar a b =
                 IntCubeHex ( b1, b2, b3 ) ->
                     a1 == b1 && a2 == b2 && (-a1 - a2) == b3
 
-                FloatCubeHex ( b1, b2, b3 ) ->
+                FloatCubeHex _ ->
                     let
                         b_ =
                             toIntCoordinates b
@@ -395,7 +397,7 @@ similar a b =
                 IntCubeHex ( b1, b2, b3 ) ->
                     a1 == b1 && a2 == b2 && a3 == b3
 
-                FloatCubeHex ( b1, b2, b3 ) ->
+                FloatCubeHex _ ->
                     let
                         b_ =
                             toIntCoordinates b
@@ -654,13 +656,13 @@ length : Hex -> Int
 length a =
     let
         a1 =
-            abs << toQ <| a
+            abs <| toQ a
 
         a2 =
-            abs << toR <| a
+            abs <| toR a
 
         a3 =
-            abs << toS <| a
+            abs <| toS a
     in
     floor <| (a1 + a2 + a3) / 2
 
@@ -1013,12 +1015,6 @@ drawLine a b =
 ring : Int -> Hex -> List Hex
 ring radius hex =
     let
-        q =
-            toQInt hex
-
-        r =
-            toRInt hex
-
         calcHex q2 r2 =
             fromInt ( q2, r2 )
                 |> plus hex
@@ -1034,8 +1030,7 @@ ring radius hex =
             List.map (calcHex q2) (List.range q1 r1)
     in
     List.range -radius radius
-        |> List.map calcRow
-        |> List.concat
+        |> List.concatMap calcRow
 
 
 {-| Draw the filled circle of a defined redius with the hex in a center
@@ -1043,8 +1038,7 @@ ring radius hex =
 circle : Int -> Hex -> List Hex
 circle radius hex =
     List.range 1 radius
-        |> List.map (\r -> ring r hex)
-        |> List.concat
+        |> List.concatMap (\r -> ring r hex)
 
 
 
@@ -1113,8 +1107,7 @@ rectangularPointyTopMap { height, width, initHex } =
 
         allLines : List Hex
         allLines =
-            List.concat <|
-                List.map widthRowLine heightLine
+            List.concatMap widthRowLine heightLine
 
         makeDictRecord : Hex -> ( Key, ( Hex, a ) )
         makeDictRecord hex =
@@ -1151,8 +1144,7 @@ rectangularFlatTopMap { height, width, initHex } =
 
         allLines : List Hex
         allLines =
-            List.concat <|
-                List.map widthColumnLine widthLine
+            List.concatMap widthColumnLine widthLine
 
         makeDictRecord : Hex -> ( Key, ( Hex, a ) )
         makeDictRecord hex =

@@ -1,10 +1,10 @@
-module Main exposing (main)
+module Main exposing (Enemy, Flags, Health, Model, Msg, Player, ScreenCoordinates, Tower, WorldCoordinates, main)
 
 import Basics.Extra
 import Browser
 import Browser.Events
 import Circle2d
-import Dict exposing (Dict)
+import Dict
 import Duration exposing (Duration)
 import Ecs
 import Ecs.Component
@@ -13,7 +13,7 @@ import Ecs.Entity
 import Ecs.System
 import Geometry.Svg
 import Hex exposing (Hex)
-import Html exposing (Html)
+import Html
 import Html.Attributes
 import Html.Events
 import Length
@@ -350,7 +350,7 @@ update msg model =
 moveEnemy : Duration -> Model -> Model
 moveEnemy deltaTime =
     Ecs.System.map2
-        (\( position, setPosition ) ( { path, distance, point }, setPath ) ->
+        (\( position, setPosition ) ( { path, distance }, setPath ) ->
             let
                 deltaSeconds =
                     Duration.inSeconds deltaTime
@@ -410,7 +410,7 @@ enemyAttack model =
     in
     Ecs.System.indexedFoldl2
         (\entity position _ nextModel ->
-            case List.Extra.find (\( playerEntity, playerPos ) -> Hex.similar position playerPos) playerPositions |> Debug.log "at the end?" of
+            case List.Extra.find (\( _, playerPos ) -> Hex.similar position playerPos) playerPositions of
                 Nothing ->
                     nextModel
 
