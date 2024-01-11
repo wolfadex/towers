@@ -1,5 +1,6 @@
 module Hex exposing
     ( Hex, Direction(..), Key
+    , origin
     , toQ, toQInt, toR, toRInt, toS, toSInt
     , toQRS, toQRSInt, fromQRSInt
     , fromInt, fromFloat, toIntCoordinates, toFloatCoordinates
@@ -12,7 +13,7 @@ module Hex exposing
     , drawLine
     , fromPoint2d, toPoint2d
     , polygonCorners
-    , Map, toKey
+    , Map, toKey, fromKey
     , rectangularFlatTopMap, rectangularPointyTopMap, circle, ring
     )
 
@@ -30,6 +31,7 @@ Forked from <https://github.com/Voronchuk/hexagons>
 
 # Helpers
 
+@docs origin
 @docs toQ, toQInt, toR, toRInt, toS, toSInt
 @docs toQRS, toQRSInt, fromQRSInt
 @docs fromInt, fromFloat, toIntCoordinates, toFloatCoordinates
@@ -64,7 +66,7 @@ Forked from <https://github.com/Voronchuk/hexagons>
 @docs fromPoint2d, toPoint2d
 @docs polygonCorners
 
-@docs Map, toKey
+@docs Map, toKey, fromKey
 
 
 ## Pre-defined map shapes
@@ -123,6 +125,13 @@ type Direction
     | SouthWest
     | West
     | NorthWest
+
+
+{-| The `Hex` at 0, 0, 0
+-}
+origin : Hex
+origin =
+    IntCubeHex ( 0, 0, 0 )
 
 
 {-| Get q coordinate for Hex as Float value
@@ -1052,7 +1061,7 @@ circle radius hex =
 {-| Dictionary storage to keep a map of hexes
 -}
 type alias Map a =
-    Dict Key ( Hex, a )
+    Dict Key a
 
 
 {-| Key to access Map cell
@@ -1079,6 +1088,12 @@ toKey hex =
             toSInt hex_
     in
     ( q, r, s )
+
+
+{-| -}
+fromKey : Key -> Hex
+fromKey ( q, r, s ) =
+    IntCubeHex ( q, r, s )
 
 
 {-| Generate Map of rectangular shape given its height and width
@@ -1109,9 +1124,9 @@ rectangularPointyTopMap { height, width, initHex } =
         allLines =
             List.concatMap widthRowLine heightLine
 
-        makeDictRecord : Hex -> ( Key, ( Hex, a ) )
+        makeDictRecord : Hex -> ( Key, a )
         makeDictRecord hex =
-            ( toKey hex, ( hex, initHex hex ) )
+            ( toKey hex, initHex hex )
     in
     allLines
         |> List.map makeDictRecord
@@ -1146,9 +1161,9 @@ rectangularFlatTopMap { height, width, initHex } =
         allLines =
             List.concatMap widthColumnLine widthLine
 
-        makeDictRecord : Hex -> ( Key, ( Hex, a ) )
+        makeDictRecord : Hex -> ( Key, a )
         makeDictRecord hex =
-            ( toKey hex, ( hex, initHex hex ) )
+            ( toKey hex, initHex hex )
     in
     allLines
         |> List.map makeDictRecord

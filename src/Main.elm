@@ -14,6 +14,7 @@ module Main exposing
     , main
     )
 
+import AStar.Generalised
 import Basics.Extra
 import Browser
 import Browser.Events
@@ -38,6 +39,7 @@ import Point2d exposing (Point2d)
 import Quantity exposing (Quantity)
 import Random
 import Random.List
+import Set
 import Svg exposing (Svg)
 import Svg.Attributes
 import Svg.Events
@@ -227,13 +229,9 @@ init : Flags -> ( Model, Cmd Msg )
 init currentTime =
     let
         tilemap =
-            { q = 0, r = 0, s = 0 }
-                |> Hex.fromQRSInt
+            Hex.origin
                 |> Hex.circle 5
-                |> List.map
-                    (\hex ->
-                        ( Hex.toKey hex, ( hex, Nothing ) )
-                    )
+                |> List.map (\hex -> ( Hex.toKey hex, Nothing ))
                 |> Dict.fromList
     in
     ( { tilemap = tilemap
@@ -263,8 +261,7 @@ init currentTime =
         |> Ecs.Entity.with ( playerSpec, Player )
         |> Ecs.Entity.with
             ( positionSpec
-            , { q = 0, r = 0, s = 0 }
-                |> Hex.fromQRSInt
+            , Hex.origin
             )
         |> Tuple.second
     , Cmd.none
@@ -277,10 +274,13 @@ createEnemy model =
         edgeHexes : List Hex
         edgeHexes =
             model.tilemap
-                |> Dict.values
+                |> Dict.keys
                 |> List.filterMap
-                    (\( hex, _ ) ->
+                    (\key ->
                         let
+                            hex =
+                                Hex.fromKey key
+
                             nbrs =
                                 hex
                                     |> Hex.neighbors
@@ -321,14 +321,54 @@ createEnemy model =
                 |> Ecs.Entity.with
                     ( pathSpec
                     , { path =
-                            Hex.drawLine
-                                hex
-                                (Hex.fromQRSInt { q = 0, r = 0, s = 0 })
+                            findPath
+                                { from = hex
+                                , to = Hex.origin
+                                , tilemap = model.tilemap
+                                }
                       , distance = 0
                       , point = Hex.toPoint2d hexMapLayout hex
                       }
                     )
                 |> Tuple.second
+
+
+findPath :
+    { from : Hex
+    , to : Hex
+    , tilemap : Hex.Map (Maybe Ecs.Entity)
+    }
+    -> List Hex
+findPath cfg =
+    AStar.Generalised.findPath
+        (\a b ->
+            Hex.distance
+                (Hex.fromKey a)
+                (Hex.fromKey b)
+                |> toFloat
+        )
+        (\a ->
+            a
+                |> Hex.fromKey
+                |> Hex.neighbors
+                |> List.filterMap
+                    (\neighbor ->
+                        case Dict.get (Hex.toKey neighbor) cfg.tilemap of
+                            Nothing ->
+                                Nothing
+
+                            Just (Just _) ->
+                                Nothing
+
+                            Just Nothing ->
+                                Just (Hex.toKey neighbor)
+                    )
+                |> Set.fromList
+        )
+        (Hex.toKey cfg.from)
+        (Hex.toKey cfg.to)
+        |> Maybe.withDefault []
+        |> List.map Hex.fromKey
 
 
 removeEnemy : Ecs.Entity -> Model -> Model
@@ -342,7 +382,7 @@ removeEnemy entity model =
         |> Tuple.second
 
 
-createTower : Hex -> Model -> Model
+createTower : Hex -> Model -> ( Ecs.Entity, Model )
 createTower position model =
     model
         |> Ecs.Entity.create ecsConfigSpec
@@ -356,7 +396,6 @@ createTower position model =
               , remaining = Duration.seconds 0
               }
             )
-        |> Tuple.second
 
 
 subscriptions : Model -> Sub Msg
@@ -398,13 +437,35 @@ update msg model =
 
         HexSelected hex ->
             if model.currency >= 100 then
-                ( { model
-                    | currency = model.currency - 100
-                  }
-                    |> createTower hex
-                    |> createEnemy
-                , Cmd.none
-                )
+                let
+                    key : Hex.Key
+                    key =
+                        Hex.toKey hex
+                in
+                case Dict.get key model.tilemap of
+                    Nothing ->
+                        ( model, Cmd.none )
+
+                    Just (Just _) ->
+                        ( model, Cmd.none )
+
+                    Just Nothing ->
+                        ( { model
+                            | currency = model.currency - 100
+                          }
+                            |> createTower hex
+                            |> (\( tower, m ) ->
+                                    { m
+                                        | tilemap =
+                                            Dict.insert
+                                                key
+                                                (Just tower)
+                                                model.tilemap
+                                    }
+                               )
+                            |> createEnemy
+                        , Cmd.none
+                        )
 
             else
                 ( model
@@ -786,33 +847,45 @@ hexMapLayout =
 viewHexGridMap : Hex.Map (Maybe Ecs.Entity) -> Svg Msg
 viewHexGridMap hexMap =
     let
-        toSvg : Hex -> String -> Svg Msg
-        toSvg hex cornersCoords =
+        toSvg : Hex -> Maybe Ecs.Entity -> String -> Svg Msg
+        toSvg hex maybeEntity cornersCoords =
             Svg.g
                 []
-                (toPolygon hex cornersCoords)
+                (toPolygon hex maybeEntity cornersCoords)
 
-        toPolygon : Hex -> String -> List (Svg Msg)
-        toPolygon hex cornersCoords =
+        toPolygon : Hex -> Maybe Ecs.Entity -> String -> List (Svg Msg)
+        toPolygon hex maybeEntity cornersCoords =
             [ Svg.polygon
-                [ Svg.Attributes.style "cursor: pointer"
-                , Svg.Attributes.stroke "#ffff00"
-                , Svg.Attributes.strokeWidth "1px"
-                , Svg.Attributes.fill "#777777"
-                , Svg.Attributes.points cornersCoords
-                , Svg.Events.onClick (HexSelected hex)
-                ]
+                ((case maybeEntity of
+                    Nothing ->
+                        [ Svg.Attributes.style "cursor: pointer"
+                        , Svg.Events.onClick (HexSelected hex)
+                        ]
+
+                    Just _ ->
+                        []
+                 )
+                    ++ [ Svg.Attributes.stroke "#ffff00"
+                       , Svg.Attributes.strokeWidth "1px"
+                       , Svg.Attributes.fill "#777777"
+                       , Svg.Attributes.points cornersCoords
+                       ]
+                )
                 []
             ]
     in
     hexMap
-        |> Dict.values
+        |> Dict.toList
         |> List.map
-            (\( hex, _ ) ->
+            (\( key, maybeEntity ) ->
+                let
+                    hex =
+                        Hex.fromKey key
+                in
                 hex
                     |> mapPolygonCorners
                     |> pointsToString
-                    |> toSvg hex
+                    |> toSvg hex maybeEntity
             )
         |> Svg.g []
 
