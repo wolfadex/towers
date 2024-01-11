@@ -1,4 +1,4 @@
-module Util.Ecs.Component exposing (update)
+module Util.Ecs.Component exposing (set, update)
 
 import Ecs
 import Ecs.Component
@@ -10,5 +10,15 @@ update fn spec entity world =
         (world
             |> spec.get
             |> Ecs.Component.update entity fn
+        )
+        world
+
+
+set : Ecs.Component.Spec comp world -> Ecs.Entity -> comp -> world -> world
+set spec entity comp world =
+    spec.set
+        (world
+            |> spec.get
+            |> Ecs.Component.set entity comp
         )
         world

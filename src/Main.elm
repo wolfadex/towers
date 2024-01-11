@@ -1,5 +1,8 @@
 module Main exposing
-    ( Enemy
+    ( AttackAnimation
+    , AttackStyle
+    , Delay
+    , Enemy
     , Flags
     , Health
     , Model
@@ -28,10 +31,10 @@ import Html
 import Html.Attributes
 import Html.Events
 import Length
+import LineSegment2d
 import List.Extra
 import Pixels exposing (Pixels)
 import Point2d exposing (Point2d)
-import Polyline2d exposing (Polyline2d)
 import Quantity exposing (Quantity)
 import Random
 import Random.List
@@ -85,6 +88,8 @@ type alias Model =
     , enemyComponent : Ecs.Component Enemy
     , towerComponent : Ecs.Component Tower
     , delayComponent : Ecs.Component Delay
+    , attackStyleComponent : Ecs.Component AttackStyle
+    , attackAnimationComponent : Ecs.Component AttackAnimation
     }
 
 
@@ -189,6 +194,29 @@ delaySpec =
     }
 
 
+type AttackStyle
+    = Laser
+
+
+attackStyleSpec : Ecs.Component.Spec AttackStyle Model
+attackStyleSpec =
+    { get = .attackStyleComponent
+    , set = \attackStyleComponent world -> { world | attackStyleComponent = attackStyleComponent }
+    }
+
+
+type AttackAnimation
+    = NoAttack
+    | Attacking { from : Hex, to : Hex, duration : Duration }
+
+
+attackAnimationSpec : Ecs.Component.Spec AttackAnimation Model
+attackAnimationSpec =
+    { get = .attackAnimationComponent
+    , set = \attackAnimationComponent world -> { world | attackAnimationComponent = attackAnimationComponent }
+    }
+
+
 
 ----------
 -- INIT --
@@ -224,6 +252,8 @@ init currentTime =
       , enemyComponent = Ecs.Component.empty
       , towerComponent = Ecs.Component.empty
       , delayComponent = Ecs.Component.empty
+      , attackStyleComponent = Ecs.Component.empty
+      , attackAnimationComponent = Ecs.Component.empty
       }
         |> createEnemy
         |> createEnemy
@@ -318,6 +348,7 @@ createTower position model =
         |> Ecs.Entity.create ecsConfigSpec
         |> Ecs.Entity.with ( colorSpec, "chartreuse" )
         |> Ecs.Entity.with ( towerSpec, Tower )
+        |> Ecs.Entity.with ( attackStyleSpec, Laser )
         |> Ecs.Entity.with ( positionSpec, position )
         |> Ecs.Entity.with
             ( delaySpec
@@ -358,6 +389,7 @@ update msg model =
             ( { model
                 | lastTimestamp = currentTimestamp
               }
+                |> attackAnimationUpdate deltaTime
                 |> towerAttack deltaTime
                 |> moveEnemy deltaTime
                 |> enemyAttack
@@ -378,6 +410,28 @@ update msg model =
                 ( model
                 , Cmd.none
                 )
+
+
+attackAnimationUpdate : Duration -> Model -> Model
+attackAnimationUpdate deltaTime =
+    Ecs.System.map
+        (\attackAnimation ->
+            case attackAnimation of
+                NoAttack ->
+                    NoAttack
+
+                Attacking animation ->
+                    let
+                        remainingDuration =
+                            animation.duration |> Quantity.minus deltaTime
+                    in
+                    if remainingDuration |> Quantity.greaterThan (Duration.seconds 0) then
+                        Attacking { animation | duration = remainingDuration }
+
+                    else
+                        NoAttack
+        )
+        attackAnimationSpec
 
 
 moveEnemy : Duration -> Model -> Model
@@ -528,38 +582,27 @@ towerAttack deltaTime model =
                             towerEntity
                             nextModel
 
-                    Just ( enemy, _ ) ->
+                    Just ( enemy, enemyPosition ) ->
                         nextModel
                             |> removeEnemy enemy
                             |> Util.Ecs.Component.update
                                 (\_ -> { delay | remaining = delay.between })
                                 delaySpec
                                 towerEntity
+                            |> Util.Ecs.Component.set
+                                attackAnimationSpec
+                                towerEntity
+                                (Attacking
+                                    { from = towerPosition
+                                    , to = enemyPosition
+                                    , duration = Duration.seconds 0.5
+                                    }
+                                )
         )
         model.positionComponent
         model.towerComponent
         model.delayComponent
         model
-
-
-enemyPath : Model -> List (Polyline2d Pixels WorldCoordinates)
-enemyPath model =
-    Ecs.System.foldl2
-        (\position color acc ->
-            (position
-                |> Hex.drawLine (Hex.fromQRSInt { q = 0, r = 0, s = 0 })
-                |> List.map
-                    (\point ->
-                        point
-                            |> Hex.toPoint2d hexMapLayout
-                    )
-                |> Polyline2d.fromVertices
-            )
-                :: acc
-        )
-        model.positionComponent
-        model.colorComponent
-        []
 
 
 
@@ -646,27 +689,40 @@ view model =
                 [ [ model.tilemap
                         |> viewHexGridMap
                   ]
-
-                -- , highlightPath model
                 , viewEnemies resolution model
                 , viewTowers resolution model
+                , viewPlayers resolution model
+                , viewAttacks resolution model
                 ]
             )
         ]
     }
 
 
-highlightPath : Model -> List (Svg Msg)
-highlightPath model =
-    model
-        |> enemyPath
-        |> List.map
-            (Geometry.Svg.polyline2d
-                [ Svg.Attributes.stroke "orange"
-                , Svg.Attributes.strokeWidth "5"
-                , Svg.Attributes.fill "none"
-                ]
-            )
+viewAttacks : Quantity Float (Quantity.Rate Pixels Length.Meters) -> Model -> List (Svg Msg)
+viewAttacks resolution model =
+    Ecs.System.foldl2
+        (\animation style acc ->
+            case animation of
+                NoAttack ->
+                    acc
+
+                Attacking { from, to } ->
+                    case style of
+                        Laser ->
+                            (LineSegment2d.from
+                                (Hex.toPoint2d hexMapLayout from)
+                                (Hex.toPoint2d hexMapLayout to)
+                                |> Geometry.Svg.lineSegment2d
+                                    [ Svg.Attributes.stroke "red"
+                                    , Svg.Attributes.strokeWidth "5"
+                                    ]
+                            )
+                                :: acc
+        )
+        model.attackAnimationComponent
+        model.attackStyleComponent
+        []
 
 
 viewEnemies : Quantity Float (Quantity.Rate Pixels Length.Meters) -> Model -> List (Svg Msg)
@@ -699,6 +755,23 @@ viewTowers resolution model =
         model.positionComponent
         model.colorComponent
         model.towerComponent
+        []
+
+
+viewPlayers : Quantity Float (Quantity.Rate Pixels Length.Meters) -> Model -> List (Svg Msg)
+viewPlayers resolution model =
+    Ecs.System.foldl3
+        (\_ position color acc ->
+            (position
+                |> Hex.toPoint2d hexMapLayout
+                |> Circle2d.withRadius (Pixels.pixels 23)
+                |> Geometry.Svg.circle2d [ Svg.Attributes.fill color ]
+            )
+                :: acc
+        )
+        model.playerComponent
+        model.positionComponent
+        model.colorComponent
         []
 
 
