@@ -1,4 +1,15 @@
-module Main exposing (Enemy, Flags, Health, Model, Msg, Player, ScreenCoordinates, Tower, WorldCoordinates, main)
+module Main exposing
+    ( Enemy
+    , Flags
+    , Health
+    , Model
+    , Msg
+    , Player
+    , ScreenCoordinates
+    , Tower
+    , WorldCoordinates
+    , main
+    )
 
 import Basics.Extra
 import Browser
@@ -28,6 +39,7 @@ import Svg exposing (Svg)
 import Svg.Attributes
 import Svg.Events
 import Time
+import Util.Ecs.Component
 import Util.Maybe
 
 
@@ -72,6 +84,7 @@ type alias Model =
     , playerComponent : Ecs.Component Player
     , enemyComponent : Ecs.Component Enemy
     , towerComponent : Ecs.Component Tower
+    , delayComponent : Ecs.Component Delay
     }
 
 
@@ -163,6 +176,19 @@ towerSpec =
     }
 
 
+type alias Delay =
+    { between : Duration
+    , remaining : Duration
+    }
+
+
+delaySpec : Ecs.Component.Spec Delay Model
+delaySpec =
+    { get = .delayComponent
+    , set = \delayComponent world -> { world | delayComponent = delayComponent }
+    }
+
+
 
 ----------
 -- INIT --
@@ -197,6 +223,7 @@ init currentTime =
       , playerComponent = Ecs.Component.empty
       , enemyComponent = Ecs.Component.empty
       , towerComponent = Ecs.Component.empty
+      , delayComponent = Ecs.Component.empty
       }
         |> createEnemy
         |> createEnemy
@@ -290,8 +317,14 @@ createTower position model =
     model
         |> Ecs.Entity.create ecsConfigSpec
         |> Ecs.Entity.with ( colorSpec, "chartreuse" )
-        |> Ecs.Entity.with ( positionSpec, position )
         |> Ecs.Entity.with ( towerSpec, Tower )
+        |> Ecs.Entity.with ( positionSpec, position )
+        |> Ecs.Entity.with
+            ( delaySpec
+            , { between = Duration.seconds 2
+              , remaining = Duration.seconds 0
+              }
+            )
         |> Tuple.second
 
 
@@ -440,46 +473,72 @@ enemyAttack model =
 
 towerAttack : Duration -> Model -> Model
 towerAttack deltaTime model =
-    Ecs.System.foldl2
-        (\towerPosition _ nextModel ->
+    Ecs.System.indexedFoldl3
+        (\towerEntity towerPosition _ delay nextModel ->
             let
-                hexRange =
-                    towerPosition
-                        |> Hex.circle 3
-                        |> List.filter
-                            (\hex ->
-                                Dict.get (Hex.toKey hex) nextModel.tilemap /= Nothing
-                            )
-
-                nearestEnemy =
-                    hexRange
-                        |> List.concatMap
-                            (\hex ->
-                                Ecs.System.indexedFoldl2
-                                    (\enemy enemyPosition _ acc ->
-                                        if Hex.similar hex enemyPosition then
-                                            ( enemy, enemyPosition ) :: acc
-
-                                        else
-                                            acc
-                                    )
-                                    nextModel.positionComponent
-                                    nextModel.enemyComponent
-                                    []
-                            )
-                        |> List.sortBy (\( _, pos ) -> Hex.distance pos towerPosition)
-                        |> List.head
+                nextRemaining =
+                    delay.remaining
+                        |> Quantity.minus deltaTime
+                        |> Quantity.max (Duration.seconds 0)
             in
-            case nearestEnemy of
-                Nothing ->
+            if nextRemaining |> Quantity.greaterThan (Duration.seconds 0) then
+                delaySpec.set
+                    (nextModel
+                        |> delaySpec.get
+                        |> Ecs.Component.set
+                            towerEntity
+                            { delay | remaining = nextRemaining }
+                    )
                     nextModel
 
-                Just ( enemy, _ ) ->
-                    nextModel
-                        |> removeEnemy enemy
+            else
+                let
+                    hexRange =
+                        towerPosition
+                            |> Hex.circle 3
+                            |> List.filter
+                                (\hex ->
+                                    Dict.get (Hex.toKey hex) nextModel.tilemap /= Nothing
+                                )
+
+                    nearestEnemy =
+                        hexRange
+                            |> List.concatMap
+                                (\hex ->
+                                    Ecs.System.indexedFoldl2
+                                        (\enemy enemyPosition _ acc ->
+                                            if Hex.similar hex enemyPosition then
+                                                ( enemy, enemyPosition ) :: acc
+
+                                            else
+                                                acc
+                                        )
+                                        nextModel.positionComponent
+                                        nextModel.enemyComponent
+                                        []
+                                )
+                            |> List.sortBy (\( _, pos ) -> Hex.distance pos towerPosition)
+                            |> List.head
+                in
+                case nearestEnemy of
+                    Nothing ->
+                        Util.Ecs.Component.update
+                            (\_ -> { delay | remaining = nextRemaining })
+                            delaySpec
+                            towerEntity
+                            nextModel
+
+                    Just ( enemy, _ ) ->
+                        nextModel
+                            |> removeEnemy enemy
+                            |> Util.Ecs.Component.update
+                                (\_ -> { delay | remaining = delay.between })
+                                delaySpec
+                                towerEntity
         )
         model.positionComponent
         model.towerComponent
+        model.delayComponent
         model
 
 
