@@ -10,6 +10,7 @@ module Main exposing
     , Player
     , ScreenCoordinates
     , Tower
+    , Wave
     , WorldCoordinates
     , main
     )
@@ -299,9 +300,11 @@ createEnemy model =
                 |> List.filterMap
                     (\key ->
                         let
+                            hex : Hex
                             hex =
                                 Hex.fromKey key
 
+                            nbrs : Int
                             nbrs =
                                 hex
                                     |> Hex.neighbors
@@ -420,7 +423,7 @@ createTower position model =
 
 
 subscriptions : Model -> Sub Msg
-subscriptions model =
+subscriptions _ =
     Browser.Events.onAnimationFrame Tick
 
 
@@ -497,15 +500,38 @@ update msg model =
 
 applyWave : Duration -> Model -> Model
 applyWave deltaTime model =
+    let
+        createEnemies : Int -> Maybe Duration -> Maybe Wave -> Model
+        createEnemies enemyCount tillNext rest =
+            List.foldl (\_ -> createEnemy)
+                { model
+                    | tillNextWave =
+                        tillNext
+                            |> Maybe.map
+                                (\t ->
+                                    { initial = t
+                                    , remaining = t
+                                    }
+                                )
+                    , waves = rest
+                }
+                (List.range 1 enemyCount)
+    in
     case ( model.tillNextWave, model.waves ) of
         ( _, Nothing ) ->
             model
 
         ( Nothing, Just waves ) ->
-            Debug.todo ""
+            case waves of
+                FinalWave enemyCount ->
+                    createEnemies enemyCount Nothing Nothing
+
+                NextWave enemyCount tillNext rest ->
+                    createEnemies enemyCount (Just tillNext) (Just rest)
 
         ( Just tillNextWave, Just waves ) ->
             let
+                remaining : Duration
                 remaining =
                     tillNextWave.remaining
                         |> Quantity.minus deltaTime
@@ -520,30 +546,11 @@ applyWave deltaTime model =
                 }
 
             else
-                let
-                    createEnemies enemyCount tillNext rest =
-                        List.foldl (\_ -> createEnemy)
-                            { model
-                                | tillNextWave =
-                                    tillNext
-                                        |> Maybe.map
-                                            (\t ->
-                                                { initial = t
-                                                , remaining = t
-                                                }
-                                            )
-                                , waves = rest
-                            }
-                            (List.range 1 enemyCount)
-                in
-                case model.waves of
-                    Nothing ->
-                        model
-
-                    Just (FinalWave enemyCount) ->
+                case waves of
+                    FinalWave enemyCount ->
                         createEnemies enemyCount Nothing Nothing
 
-                    Just (NextWave enemyCount tillNext rest) ->
+                    NextWave enemyCount tillNext rest ->
                         createEnemies enemyCount (Just tillNext) (Just rest)
 
 
@@ -557,6 +564,7 @@ attackAnimationUpdate deltaTime =
 
                 Attacking animation ->
                     let
+                        remainingDuration : Duration
                         remainingDuration =
                             animation.duration |> Quantity.minus deltaTime
                     in
@@ -574,15 +582,19 @@ moveEnemy deltaTime =
     Ecs.System.map2
         (\( position, setPosition ) ( { path, distance }, setPath ) ->
             let
+                deltaSeconds : Float
                 deltaSeconds =
                     Duration.inSeconds deltaTime
 
+                totalDistance : Float
                 totalDistance =
                     distance + deltaSeconds
 
+                tilesToDrop : Int
                 tilesToDrop =
                     floor totalDistance
 
+                remainingPath : List Hex
                 remainingPath =
                     path
                         |> List.drop tilesToDrop
@@ -598,6 +610,7 @@ moveEnemy deltaTime =
 
                 currentHex :: nextHex :: _ ->
                     let
+                        nextDistance : Float
                         nextDistance =
                             totalDistance
                                 |> Basics.Extra.fractionalModBy 1.0
@@ -623,6 +636,7 @@ moveEnemy deltaTime =
 enemyAttack : Model -> Model
 enemyAttack model =
     let
+        playerPositions : List ( Ecs.Entity, Hex )
         playerPositions =
             Ecs.System.indexedFoldl2
                 (\entity position _ players -> ( entity, position ) :: players)
@@ -665,6 +679,7 @@ towerAttack deltaTime model =
     Ecs.System.indexedFoldl3
         (\towerEntity towerPosition _ delay nextModel ->
             let
+                nextRemaining : Duration
                 nextRemaining =
                     delay.remaining
                         |> Quantity.minus deltaTime
@@ -682,6 +697,7 @@ towerAttack deltaTime model =
 
             else
                 let
+                    hexRange : List Hex
                     hexRange =
                         towerPosition
                             |> Hex.circle 3
@@ -690,6 +706,7 @@ towerAttack deltaTime model =
                                     Dict.get (Hex.toKey hex) nextModel.tilemap /= Nothing
                                 )
 
+                    nearestEnemy : Maybe ( Ecs.Entity, Hex )
                     nearestEnemy =
                         hexRange
                             |> List.concatMap
@@ -976,6 +993,7 @@ viewHexGridMap hexMap =
         |> List.map
             (\( key, maybeEntity ) ->
                 let
+                    hex : Hex
                     hex =
                         Hex.fromKey key
                 in

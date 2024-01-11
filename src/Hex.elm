@@ -303,18 +303,23 @@ toIntCoordinates hex =
 
         FloatCubeHex ( q_, r_, s_ ) ->
             let
+                q1 : Int
                 q1 =
                     round q_
 
+                r1 : Int
                 r1 =
                     round r_
 
+                s1 : Int
                 s1 =
                     round s_
 
+                q_diff : Float
                 q_diff =
                     abs (toFloat q1 - q_)
 
+                r_diff : Float
                 r_diff =
                     abs (toFloat r1 - r_)
             in
@@ -323,6 +328,7 @@ toIntCoordinates hex =
 
             else
                 let
+                    s_diff : Float
                     s_diff =
                         abs (toFloat s1 - s_)
                 in
@@ -345,9 +351,11 @@ toFloatCoordinates hex =
     case hex of
         AxialHex ( q1, r1 ) ->
             let
+                q_ : Float
                 q_ =
                     toFloat q1
 
+                r_ : Float
                 r_ =
                     toFloat r1
             in
@@ -384,15 +392,19 @@ similar a b =
 
                 FloatCubeHex _ ->
                     let
+                        b_ : Hex
                         b_ =
                             toIntCoordinates b
 
+                        b1_ : Int
                         b1_ =
                             toQInt b_
 
+                        b2_ : Int
                         b2_ =
                             toRInt b_
 
+                        b3_ : Int
                         b3_ =
                             toSInt b_
                     in
@@ -408,15 +420,19 @@ similar a b =
 
                 FloatCubeHex _ ->
                     let
+                        b_ : Hex
                         b_ =
                             toIntCoordinates b
 
+                        b1_ : Int
                         b1_ =
                             toQInt b_
 
+                        b2_ : Int
                         b2_ =
                             toRInt b_
 
+                        b3_ : Int
                         b3_ =
                             toSInt b_
                     in
@@ -424,15 +440,19 @@ similar a b =
 
         FloatCubeHex ( a1, a2, a3 ) ->
             let
+                a_ : Hex
                 a_ =
                     toIntCoordinates a
 
+                a1_ : Int
                 a1_ =
                     toQInt a_
 
+                a2_ : Int
                 a2_ =
                     toRInt a_
 
+                a3_ : Int
                 a3_ =
                     toSInt a_
             in
@@ -482,12 +502,15 @@ plus a b =
 
                 FloatCubeHex ( b1, b2, b3 ) ->
                     let
+                        a1_ : Float
                         a1_ =
                             toFloat a1
 
+                        a2_ : Float
                         a2_ =
                             toFloat a2
 
+                        a3_ : Float
                         a3_ =
                             -a1_ - a2_
                     in
@@ -503,12 +526,15 @@ plus a b =
 
                 FloatCubeHex ( b1, b2, b3 ) ->
                     let
+                        a1_ : Float
                         a1_ =
                             toFloat a1
 
+                        a2_ : Float
                         a2_ =
                             toFloat a2
 
+                        a3_ : Float
                         a3_ =
                             toFloat a3
                     in
@@ -518,12 +544,15 @@ plus a b =
             case b of
                 AxialHex ( b1, b2 ) ->
                     let
+                        b1_ : Float
                         b1_ =
                             toFloat b1
 
+                        b2_ : Float
                         b2_ =
                             toFloat b2
 
+                        b3_ : Float
                         b3_ =
                             -b1_ - b2_
                     in
@@ -531,12 +560,15 @@ plus a b =
 
                 IntCubeHex ( b1, b2, b3 ) ->
                     let
+                        b1_ : Float
                         b1_ =
                             toFloat b1
 
+                        b2_ : Float
                         b2_ =
                             toFloat b2
 
+                        b3_ : Float
                         b3_ =
                             toFloat b3
                     in
@@ -566,12 +598,15 @@ minus a b =
 
                 FloatCubeHex ( b1, b2, b3 ) ->
                     let
+                        a1_ : Float
                         a1_ =
                             toFloat a1
 
+                        a2_ : Float
                         a2_ =
                             toFloat a2
 
+                        a3_ : Float
                         a3_ =
                             -a1_ - a2_
                     in
@@ -587,12 +622,15 @@ minus a b =
 
                 FloatCubeHex ( b1, b2, b3 ) ->
                     let
+                        a1_ : Float
                         a1_ =
                             toFloat a1
 
+                        a2_ : Float
                         a2_ =
                             toFloat a2
 
+                        a3_ : Float
                         a3_ =
                             toFloat a3
                     in
@@ -602,12 +640,15 @@ minus a b =
             case b of
                 AxialHex ( b1, b2 ) ->
                     let
+                        b1_ : Float
                         b1_ =
                             toFloat b1
 
+                        b2_ : Float
                         b2_ =
                             toFloat b2
 
+                        b3_ : Float
                         b3_ =
                             -b1_ - b2_
                     in
@@ -615,12 +656,15 @@ minus a b =
 
                 IntCubeHex ( b1, b2, b3 ) ->
                     let
+                        b1_ : Float
                         b1_ =
                             toFloat b1
 
+                        b2_ : Float
                         b2_ =
                             toFloat b2
 
+                        b3_ : Float
                         b3_ =
                             toFloat b3
                     in
@@ -648,6 +692,7 @@ multiplyBy k a =
 
         FloatCubeHex ( a1, a2, a3 ) ->
             let
+                k_ : Float
                 k_ =
                     toFloat k
             in
@@ -664,12 +709,15 @@ multiplyBy k a =
 length : Hex -> Int
 length a =
     let
+        a1 : Float
         a1 =
             abs <| toQ a
 
+        a2 : Float
         a2 =
             abs <| toR a
 
+        a3 : Float
         a3 =
             abs <| toS a
     in
@@ -771,6 +819,7 @@ type alias Layout =
 precision : Int -> Float -> Float
 precision division number =
     let
+        k : Float
         k =
             toFloat <| 10 ^ division
     in
@@ -831,15 +880,19 @@ toPoint2d layout hex =
         ( xo, yo ) =
             layout.origin
 
+        q : Float
         q =
             toQ hex
 
+        r : Float
         r =
             toR hex
 
+        x : Float
         x =
             precision 2 <| (((f0 * q) + (f1 * r)) * xl) + xo
 
+        y : Float
         y =
             precision 2 <| (((f2 * q) + (f3 * r)) * yl) + yo
     in
@@ -863,15 +916,19 @@ fromPoint2d layout point =
         { x, y } =
             Point2d.toPixels point
 
+        x1 : Float
         x1 =
             (x - xo) / xl
 
+        y1 : Float
         y1 =
             (y - yo) / yl
 
+        q : Float
         q =
             (f0 * x1) + (f1 * y1)
 
+        r : Float
         r =
             (f2 * x1) + (f3 * y1)
     in
@@ -886,15 +943,19 @@ hexCornerOffset layout corner =
         ( xl, yl ) =
             layout.size
 
+        startAngle : Float
         startAngle =
             layout.orientation.start_angle
 
+        angle : Float
         angle =
             ((2.0 * pi) * (toFloat corner + startAngle)) / 6
 
+        x : Float
         x =
             precision 2 <| xl * cos angle
 
+        y : Float
         y =
             precision 2 <| yl * sin angle
     in
@@ -909,6 +970,7 @@ polygonCorners layout hex =
         ( x, y ) =
             toPointInternal layout hex
 
+        offsetHex : ( Float, Float ) -> ( Float, Float ) -> ( Float, Float )
         offsetHex ( x__, y__ ) ( x_, y_ ) =
             ( precision 2 <| x__ + x_, precision 2 <| y__ + y_ )
     in
@@ -928,15 +990,19 @@ toPointInternal layout hex =
         ( xo, yo ) =
             layout.origin
 
+        q : Float
         q =
             toQ hex
 
+        r : Float
         r =
             toR hex
 
+        x : Float
         x =
             precision 2 <| (((f0 * q) + (f1 * r)) * xl) + xo
 
+        y : Float
         y =
             precision 2 <| (((f2 * q) + (f3 * r)) * yl) + yo
     in
@@ -948,27 +1014,35 @@ toPointInternal layout hex =
 hexLerp : Hex -> Hex -> Float -> Hex
 hexLerp a b t =
     let
+        a_ : Hex
         a_ =
             toFloatCoordinates a
 
+        b_ : Hex
         b_ =
             toFloatCoordinates b
 
+        q1 : Float
         q1 =
             toQ a_
 
+        q2 : Float
         q2 =
             toQ b_
 
+        r1 : Float
         r1 =
             toR a_
 
+        r2 : Float
         r2 =
             toR b_
 
+        q : Float
         q =
             q1 + ((q2 - q1) * t)
 
+        r : Float
         r =
             r1 + ((r2 - r1) * t)
     in
@@ -980,39 +1054,51 @@ hexLerp a b t =
 drawLine : Hex -> Hex -> List Hex
 drawLine a b =
     let
+        n : Float
         n =
             toFloat <| distance a b
 
+        step : Float
         step =
             1.0 / max n 1.0
 
+        aq : Float
         aq =
             toQ a
 
+        ar : Float
         ar =
             toR a
 
+        as_ : Float
         as_ =
             toS a
 
+        bq : Float
         bq =
             toQ b
 
+        br : Float
         br =
             toR b
 
+        bs : Float
         bs =
             toS b
 
+        a_nudge : Hex
         a_nudge =
             FloatCubeHex ( aq + 1.0e-6, ar + 1.0e-6, as_ - 2.0e-6 )
 
+        b_nudge : Hex
         b_nudge =
             FloatCubeHex ( bq + 1.0e-6, br + 1.0e-6, bs - 2.0e-6 )
 
+        float_steps : List Float
         float_steps =
             List.map toFloat (List.range 0 (truncate n))
 
+        steps : List Float
         steps =
             List.map ((*) step) float_steps
     in
@@ -1024,15 +1110,19 @@ drawLine a b =
 ring : Int -> Hex -> List Hex
 ring radius hex =
     let
+        calcHex : Int -> Int -> Hex
         calcHex q2 r2 =
             fromInt ( q2, r2 )
                 |> plus hex
 
+        calcRow : Int -> List Hex
         calcRow q2 =
             let
+                q1 : Int
                 q1 =
                     max -radius (-q2 - radius)
 
+                r1 : Int
                 r1 =
                     min radius (-q2 + radius)
             in
@@ -1075,15 +1165,19 @@ type alias Key =
 toKey : Hex -> Key
 toKey hex =
     let
+        hex_ : Hex
         hex_ =
             toIntCoordinates hex
 
+        q : Int
         q =
             toQInt hex_
 
+        r : Int
         r =
             toRInt hex_
 
+        s : Int
         s =
             toSInt hex_
     in
@@ -1101,9 +1195,11 @@ fromKey ( q, r, s ) =
 rectangularPointyTopMap : { width : Int, height : Int, initHex : Hex -> a } -> Map a
 rectangularPointyTopMap { height, width, initHex } =
     let
+        widthLine : List Int
         widthLine =
             List.range 0 width
 
+        heightLine : List Int
         heightLine =
             List.range 0 height
 
@@ -1138,9 +1234,11 @@ rectangularPointyTopMap { height, width, initHex } =
 rectangularFlatTopMap : { width : Int, height : Int, initHex : Hex -> a } -> Map a
 rectangularFlatTopMap { height, width, initHex } =
     let
+        widthLine : List Int
         widthLine =
             List.range 0 width
 
+        heightLine : List Int
         heightLine =
             List.range 0 height
 
