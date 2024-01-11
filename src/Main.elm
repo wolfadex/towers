@@ -19,6 +19,7 @@ import Basics.Extra
 import Browser
 import Browser.Events
 import Circle2d
+import Css
 import Dict
 import Duration exposing (Duration)
 import Ecs
@@ -74,6 +75,8 @@ type alias Model =
     , seed : Random.Seed
     , lastTimestamp : Time.Posix
     , currency : Int
+    , waves : Maybe Wave
+    , tillNextWave : Maybe { initial : Duration, remaining : Duration }
 
     -- ECS
     , ecsConfig : Ecs.Config
@@ -228,6 +231,7 @@ attackAnimationSpec =
 init : Flags -> ( Model, Cmd Msg )
 init currentTime =
     let
+        tilemap : Hex.Map (Maybe Ecs.Entity)
         tilemap =
             Hex.origin
                 |> Hex.circle 5
@@ -236,9 +240,20 @@ init currentTime =
     in
     ( { tilemap = tilemap
       , cameraPosition = Point2d.origin
-      , seed = Random.initialSeed 0
+      , seed = Random.initialSeed currentTime
       , lastTimestamp = Time.millisToPosix currentTime
       , currency = 500
+      , waves =
+            FinalWave 7
+                |> NextWave 5 (Duration.seconds 10)
+                |> NextWave 3 (Duration.seconds 10)
+                |> NextWave 2 (Duration.seconds 10)
+                |> Just
+      , tillNextWave =
+            Just
+                { initial = Duration.seconds 1
+                , remaining = Duration.seconds 1
+                }
 
       -- ECS
       , ecsConfig = Ecs.Config.init
@@ -253,19 +268,25 @@ init currentTime =
       , attackStyleComponent = Ecs.Component.empty
       , attackAnimationComponent = Ecs.Component.empty
       }
-        |> createEnemy
-        |> createEnemy
+        |> createPlayer
+    , Cmd.none
+    )
+
+
+type Wave
+    = FinalWave Int
+    | NextWave Int Duration Wave
+
+
+createPlayer : Model -> Model
+createPlayer model =
+    model
         |> Ecs.Entity.create ecsConfigSpec
         |> Ecs.Entity.with ( colorSpec, "cornflowerblue" )
         |> Ecs.Entity.with ( healthSpec, { current = 100, max = 100 } )
         |> Ecs.Entity.with ( playerSpec, Player )
-        |> Ecs.Entity.with
-            ( positionSpec
-            , Hex.origin
-            )
+        |> Ecs.Entity.with ( positionSpec, Hex.origin )
         |> Tuple.second
-    , Cmd.none
-    )
 
 
 createEnemy : Model -> Model
@@ -428,6 +449,7 @@ update msg model =
             ( { model
                 | lastTimestamp = currentTimestamp
               }
+                |> applyWave deltaTime
                 |> attackAnimationUpdate deltaTime
                 |> towerAttack deltaTime
                 |> moveEnemy deltaTime
@@ -471,6 +493,58 @@ update msg model =
                 ( model
                 , Cmd.none
                 )
+
+
+applyWave : Duration -> Model -> Model
+applyWave deltaTime model =
+    case ( model.tillNextWave, model.waves ) of
+        ( _, Nothing ) ->
+            model
+
+        ( Nothing, Just waves ) ->
+            Debug.todo ""
+
+        ( Just tillNextWave, Just waves ) ->
+            let
+                remaining =
+                    tillNextWave.remaining
+                        |> Quantity.minus deltaTime
+            in
+            if remaining |> Quantity.greaterThan (Duration.seconds 0) then
+                { model
+                    | tillNextWave =
+                        Just
+                            { tillNextWave
+                                | remaining = remaining
+                            }
+                }
+
+            else
+                let
+                    createEnemies enemyCount tillNext rest =
+                        List.foldl (\_ -> createEnemy)
+                            { model
+                                | tillNextWave =
+                                    tillNext
+                                        |> Maybe.map
+                                            (\t ->
+                                                { initial = t
+                                                , remaining = t
+                                                }
+                                            )
+                                , waves = rest
+                            }
+                            (List.range 1 enemyCount)
+                in
+                case model.waves of
+                    Nothing ->
+                        model
+
+                    Just (FinalWave enemyCount) ->
+                        createEnemies enemyCount Nothing Nothing
+
+                    Just (NextWave enemyCount tillNext rest) ->
+                        createEnemies enemyCount (Just tillNext) (Just rest)
 
 
 attackAnimationUpdate : Duration -> Model -> Model
@@ -736,6 +810,29 @@ view model =
             []
             [ Html.text "Money: "
             , Html.text ("¥" ++ String.fromInt model.currency)
+            ]
+        , Html.br [] []
+        , Html.label
+            []
+            [ Html.text "Next wave: "
+            , case model.tillNextWave of
+                Nothing ->
+                    Html.text "No more waves"
+
+                Just tillNextWave ->
+                    Html.div
+                        [ Css.waveMeter
+                        ]
+                        [ Html.div
+                            [ Css.waveMeterInner
+                            , (Duration.inSeconds tillNextWave.remaining / Duration.inSeconds tillNextWave.initial)
+                                |> (*) 100
+                                |> String.fromFloat
+                                |> (\w -> w ++ "%")
+                                |> Html.Attributes.style "width"
+                            ]
+                            []
+                        ]
             ]
         , Svg.svg
             [ Svg.Attributes.width "100%"
