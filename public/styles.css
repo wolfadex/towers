@@ -2,6 +2,33 @@
     box-sizing: border-box;
 }
 
+:root {
+    --color-brown: #6f583d;
+    --color-blue: #7096d2;
+    --color-yellow: #e0a23d;
+    --color-green: #505221;
+}
+
+html {
+    height: 100%;
+}
+
+body {
+    height: 100%;
+    background-color: var(--color-brown);
+    margin: 0;
+}
+
+button {
+    font-size: 1rem;
+    border-radius: 1rem 0;
+    padding: 0.5rem 3rem;
+    background-color: var(--color-yellow);
+    border: none;
+    box-shadow: -3px 3px 0px 3px var(--color-blue);
+    cursor: pointer;
+}
+
 .waveMeter {
     height: 1rem;
     border: 1px solid black;
@@ -12,4 +39,29 @@
 .waveMeterInner {
     height: 100%;
     background-color: lightblue;
+}
+
+.mainMenu {
+    display: flex;
+    width: 100%;
+    justify-content: center;
+}
+
+.menu {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    align-items: center;
+
+    & button {
+        width: 100%;
+    }
+}
+
+.title {
+    font-size: 4rem;
+    margin: 3rem 0;
+    text-align: center;
+    color: var(--color-yellow);
+    text-shadow: -3px 3px 0px var(--color-blue);
 }
