@@ -7,8 +7,20 @@ import Html.Events
 import Tea exposing (Tea)
 
 
+
+-----------
+-- MODEL --
+-----------
+
+
 type alias Model =
     {}
+
+
+
+----------
+-- INIT --
+----------
 
 
 init : { toMsg : Msg -> msg, toModel : Model -> model } -> Tea model msg
@@ -18,9 +30,21 @@ init cfg =
         |> Tea.map cfg
 
 
+
+-------------------
+-- SUBSCRIPTIONS --
+-------------------
+
+
 subscriptions : { toMsg : Msg -> msg } -> Model -> Sub msg
 subscriptions cfg _ =
     Sub.none
+
+
+
+------------
+-- UPDATE --
+------------
 
 
 type Msg
@@ -42,6 +66,12 @@ update cfg msg model =
                 |> Tea.save
                 |> Tea.map cfg
                 |> Tea.withReply cfg.onGameStart
+
+
+
+----------
+-- VIEW --
+----------
 
 
 view : { toMsg : Msg -> msg } -> Model -> List (Html msg)

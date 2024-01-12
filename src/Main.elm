@@ -43,6 +43,12 @@ init _ =
         |> Tea.toTuple
 
 
+
+-------------------
+-- SUBSCRIPTIONS --
+-------------------
+
+
 subscriptions : Model -> Sub Msg
 subscriptions model =
     case model of

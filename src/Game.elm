@@ -1,10 +1,29 @@
-module Game exposing (AttackAnimation(..), AttackStyle(..), Delay, Enemy(..), Health, Model, Msg(..), Player(..), ScreenCoordinates(..), Tower(..), Wave(..), WorldCoordinates(..), init, subscriptions, update, view)
+module Game exposing
+    ( AttackAnimation(..)
+    , AttackStyle(..)
+    , Delay
+    , Enemy(..)
+    , Health
+    , Model
+    , Msg(..)
+    , Player(..)
+    , ScreenCoordinates(..)
+    , Tower(..)
+    , TowerCreationType
+    , Wave(..)
+    , WorldCoordinates(..)
+    , init
+    , subscriptions
+    , update
+    , view
+    )
 
 import AStar.Generalised
 import Basics.Extra
 import Browser.Events
 import Circle2d
 import Css
+import Css.Color
 import Dict
 import Duration exposing (Duration)
 import Ecs
@@ -16,6 +35,7 @@ import Geometry.Svg
 import Hex exposing (Hex)
 import Html exposing (Html)
 import Html.Attributes
+import Html.Events
 import Length
 import LineSegment2d
 import List.Extra
@@ -48,6 +68,7 @@ type alias Model =
     , currency : Int
     , waves : Maybe Wave
     , tillNextWave : Maybe { initial : Duration, remaining : Duration }
+    , towerCreationType : TowerCreationType
 
     -- ECS
     , ecsConfig : Ecs.Config
@@ -67,6 +88,11 @@ type alias Model =
     , attackStyleComponent : Ecs.Component AttackStyle
     , attackAnimationComponent : Ecs.Component AttackAnimation
     }
+
+
+type TowerCreationType
+    = AttackTower
+    | Wall
 
 
 type ScreenCoordinates
@@ -229,6 +255,7 @@ init cfg =
             { initial = Duration.seconds 1
             , remaining = Duration.seconds 1
             }
+    , towerCreationType = AttackTower
 
     -- ECS
     , ecsConfig = Ecs.Config.init
@@ -371,7 +398,7 @@ findPath cfg =
 
 removeEnemy : Ecs.Entity -> Model -> Model
 removeEnemy entity model =
-    ( entity, model )
+    ( entity, { model | currency = model.currency + 10 } )
         |> Ecs.Entity.remove colorSpec
         |> Ecs.Entity.remove healthSpec
         |> Ecs.Entity.remove positionSpec
@@ -380,8 +407,8 @@ removeEnemy entity model =
         |> Tuple.second
 
 
-createTower : Hex -> Model -> ( Ecs.Entity, Model )
-createTower position model =
+createAttackTower : Hex -> Model -> ( Ecs.Entity, Model )
+createAttackTower position model =
     model
         |> Ecs.Entity.create ecsConfigSpec
         |> Ecs.Entity.with ( colorSpec, "chartreuse" )
@@ -394,6 +421,21 @@ createTower position model =
               , remaining = Duration.seconds 0
               }
             )
+
+
+createWall : Hex -> Model -> ( Ecs.Entity, Model )
+createWall position model =
+    model
+        |> Ecs.Entity.create ecsConfigSpec
+        |> Ecs.Entity.with ( colorSpec, "black" )
+        |> Ecs.Entity.with ( towerSpec, Tower )
+        |> Ecs.Entity.with ( positionSpec, position )
+
+
+
+-------------------
+-- SUBSCRIPTIONS --
+-------------------
 
 
 subscriptions : { toMsg : Msg -> msg } -> Model -> Sub msg
@@ -411,6 +453,7 @@ subscriptions cfg _ =
 type Msg
     = Tick Time.Posix
     | HexSelected Hex
+    | TowerTypeSelected TowerCreationType
 
 
 update : { toMsg : Msg -> msg, toModel : Model -> model } -> Msg -> Model -> Tea model msg
@@ -435,42 +478,57 @@ update cfg msg model =
                     |> enemyAttack
                     |> Tea.save
 
+            TowerTypeSelected towerCreationType ->
+                { model
+                    | towerCreationType = towerCreationType
+                }
+                    |> Tea.save
+
             HexSelected hex ->
-                if model.currency >= 100 then
-                    let
-                        key : Hex.Key
-                        key =
-                            Hex.toKey hex
-                    in
-                    case Dict.get key model.tilemap of
-                        Nothing ->
-                            model
-                                |> Tea.save
+                case model.towerCreationType of
+                    AttackTower ->
+                        createTower createAttackTower 100 hex model
 
-                        Just (Just _) ->
-                            model
-                                |> Tea.save
+                    Wall ->
+                        createTower createWall 50 hex model
 
-                        Just Nothing ->
-                            { model
-                                | currency = model.currency - 100
+
+createTower : (Hex -> Model -> ( Ecs.Entity, Model )) -> Int -> Hex -> Model -> Tea Model Msg
+createTower createFn cost hex model =
+    if model.currency >= cost then
+        let
+            key : Hex.Key
+            key =
+                Hex.toKey hex
+        in
+        case Dict.get key model.tilemap of
+            Nothing ->
+                model
+                    |> Tea.save
+
+            Just (Just _) ->
+                model
+                    |> Tea.save
+
+            Just Nothing ->
+                { model
+                    | currency = model.currency - cost
+                }
+                    |> createFn hex
+                    |> (\( tower, m ) ->
+                            { m
+                                | tilemap =
+                                    Dict.insert
+                                        key
+                                        (Just tower)
+                                        model.tilemap
                             }
-                                |> createTower hex
-                                |> (\( tower, m ) ->
-                                        { m
-                                            | tilemap =
-                                                Dict.insert
-                                                    key
-                                                    (Just tower)
-                                                    model.tilemap
-                                        }
-                                   )
-                                |> createEnemy
-                                |> Tea.save
+                       )
+                    |> Tea.save
 
-                else
-                    model
-                        |> Tea.save
+    else
+        model
+            |> Tea.save
 
 
 applyWave : Duration -> Model -> Model
@@ -779,55 +837,55 @@ view cfg model =
                         |> String.fromFloat
                     ]
         in
-        [ Html.h1 [] [ Html.text "Tower defense" ]
-        , Ecs.System.foldl2
-            (\_ health acc ->
-                Html.label
-                    []
-                    [ Html.text "Health: "
-                    , Html.meter
-                        [ Html.Attributes.min "0"
-                        , Html.Attributes.max (String.fromInt health.max)
-                        , Html.Attributes.value (String.fromInt health.current)
-                        , Html.Attributes.attribute "low" (String.fromInt (health.max // 4))
-                        , Html.Attributes.attribute "high" (String.fromInt (health.max // 2))
-                        , Html.Attributes.attribute "optimum" (String.fromInt (health.max // 4 * 3))
-                        ]
-                        []
-                    ]
-                    :: acc
-            )
-            model.playerComponent
-            model.healthComponent
-            []
-            |> Html.div []
-        , Html.label
-            []
-            [ Html.text "Money: "
-            , Html.text ("¥" ++ String.fromInt model.currency)
-            ]
-        , Html.br [] []
-        , Html.label
-            []
-            [ Html.text "Next wave: "
-            , case model.tillNextWave of
-                Nothing ->
-                    Html.text "No more waves"
+        [ Html.div [ Css.gameHeader ]
+            [ Html.label
+                []
+                [ Html.text "Next wave: "
+                , case model.tillNextWave of
+                    Nothing ->
+                        Html.text "No more waves"
 
-                Just tillNextWave ->
-                    Html.div
-                        [ Css.waveMeter
+                    Just tillNextWave ->
+                        meter
+                            { percent =
+                                (Duration.inSeconds tillNextWave.remaining / Duration.inSeconds tillNextWave.initial)
+                                    |> (*) 100
+                            , color = Css.Color.blue
+                            }
+                ]
+            , Ecs.System.foldl2
+                (\_ health acc ->
+                    Html.label
+                        []
+                        [ Html.text "Health: "
+                        , meter
+                            { percent =
+                                (toFloat health.current / toFloat health.max)
+                                    |> (*) 100
+                            , color = Css.Color.yellow
+                            }
                         ]
-                        [ Html.div
-                            [ Css.waveMeterInner
-                            , (Duration.inSeconds tillNextWave.remaining / Duration.inSeconds tillNextWave.initial)
-                                |> (*) 100
-                                |> String.fromFloat
-                                |> (\w -> w ++ "%")
-                                |> Html.Attributes.style "width"
-                            ]
-                            []
-                        ]
+                        :: acc
+                )
+                model.playerComponent
+                model.healthComponent
+                []
+                |> Html.div []
+            , Html.label
+                []
+                [ Html.text "Money: "
+                , Html.text ("¥" ++ String.fromInt model.currency)
+                ]
+            , Html.div []
+                [ Html.button
+                    [ Html.Events.onClick (TowerTypeSelected AttackTower)
+                    ]
+                    [ Html.text "Tower" ]
+                , Html.button
+                    [ Html.Events.onClick (TowerTypeSelected Wall)
+                    ]
+                    [ Html.text "Wall" ]
+                ]
             ]
         , Svg.svg
             [ Svg.Attributes.width "100%"
@@ -997,3 +1055,17 @@ pointToStringCoords ( x, y ) =
 mapPolygonCorners : Hex -> List ( Float, Float )
 mapPolygonCorners =
     Hex.polygonCorners hexMapLayout
+
+
+meter : { percent : Float, color : String } -> Html msg
+meter { percent, color } =
+    Html.div
+        [ Css.meter
+        ]
+        [ Html.div
+            [ Css.meterInner
+            , Html.Attributes.style "background-color" color
+            , Html.Attributes.style "width" (String.fromFloat percent ++ "%")
+            ]
+            []
+        ]
