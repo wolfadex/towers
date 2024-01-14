@@ -86,7 +86,7 @@ type alias InitializingModel =
 
 
 type alias ReadyModel =
-    { tilemap : Hex.Map (Maybe Ecs.Entity)
+    { tilemap : Hex.Map ( Scene3d.Entity WorldCoordinates, Maybe Ecs.Entity )
     , cameraPosition : Point2d Pixels ScreenCoordinates
     , seed : Random.Seed
     , lastTimestamp : Time.Posix
@@ -99,6 +99,7 @@ type alias ReadyModel =
     -- ECS
     , ecsConfig : Ecs.Config
     , colorComponent : Ecs.Component String
+    , staticMeshComponent : Ecs.Component (Scene3d.Entity WorldCoordinates)
     , positionComponent : Ecs.Component Hex
     , healthComponent : Ecs.Component Health
     , pathComponent :
@@ -149,6 +150,13 @@ colorSpec : Ecs.Component.Spec String ReadyModel
 colorSpec =
     { get = .colorComponent
     , set = \colorComponent world -> { world | colorComponent = colorComponent }
+    }
+
+
+staticMeshSpec : Ecs.Component.Spec (Scene3d.Entity WorldCoordinates) ReadyModel
+staticMeshSpec =
+    { get = .staticMeshComponent
+    , set = \staticMeshComponent world -> { world | staticMeshComponent = staticMeshComponent }
     }
 
 
@@ -337,9 +345,32 @@ type Wave
 
 createPlayer : ReadyModel -> ReadyModel
 createPlayer model =
+    let
+        ( mesh, shadow ) =
+            model.meshes.thingToProtect
+
+        translateBy : Vector3d Length.Meters WorldCoordinates
+        translateBy =
+            Hex.origin
+                |> Hex.toPoint2d hexMapLayout
+                |> Point3d.on SketchPlane3d.xy
+                |> Point3d.translateIn Direction3d.positiveZ (Length.meters 2)
+                |> Vector3d.from Point3d.origin
+    in
     model
         |> Ecs.Entity.create ecsConfigSpec
-        |> Ecs.Entity.with ( colorSpec, "cornflowerblue" )
+        |> Ecs.Entity.with
+            ( staticMeshSpec
+            , Scene3d.meshWithShadow
+                (Scene3d.Material.metal
+                    { baseColor = Color.lightOrange
+                    , roughness = 0.5
+                    }
+                )
+                mesh
+                shadow
+                |> Scene3d.translateBy translateBy
+            )
         |> Ecs.Entity.with ( healthSpec, { current = 100, max = 100 } )
         |> Ecs.Entity.with ( playerSpec, Player )
         |> Ecs.Entity.with ( positionSpec, Hex.origin )
@@ -416,7 +447,7 @@ createEnemy model =
 findPath :
     { from : Hex
     , to : Hex
-    , tilemap : Hex.Map (Maybe Ecs.Entity)
+    , tilemap : Hex.Map ( Scene3d.Entity WorldCoordinates, Maybe Ecs.Entity )
     }
     -> List Hex
 findPath cfg =
@@ -437,10 +468,10 @@ findPath cfg =
                             Nothing ->
                                 Nothing
 
-                            Just (Just _) ->
+                            Just ( _, Just _ ) ->
                                 Nothing
 
-                            Just Nothing ->
+                            Just ( _, Nothing ) ->
                                 Just (Hex.toKey neighbor)
                     )
                 |> Set.fromList
@@ -464,9 +495,31 @@ removeEnemy entity model =
 
 createAttackTower : Hex -> ReadyModel -> ( Ecs.Entity, ReadyModel )
 createAttackTower position model =
+    let
+        ( mesh, shadow ) =
+            model.meshes.laserTower
+
+        translateBy : Vector3d Length.Meters WorldCoordinates
+        translateBy =
+            position
+                |> Hex.toPoint2d hexMapLayout
+                |> Point3d.on SketchPlane3d.xy
+                |> Vector3d.from Point3d.origin
+    in
     model
         |> Ecs.Entity.create ecsConfigSpec
-        |> Ecs.Entity.with ( colorSpec, "chartreuse" )
+        |> Ecs.Entity.with
+            ( staticMeshSpec
+            , Scene3d.meshWithShadow
+                (Scene3d.Material.metal
+                    { baseColor = Color.green
+                    , roughness = 0.5
+                    }
+                )
+                mesh
+                shadow
+                |> Scene3d.translateBy translateBy
+            )
         |> Ecs.Entity.with ( trapSpec, Trap )
         |> Ecs.Entity.with ( attackStyleSpec, Laser )
         |> Ecs.Entity.with ( positionSpec, position )
@@ -480,9 +533,31 @@ createAttackTower position model =
 
 createWall : Hex -> ReadyModel -> ( Ecs.Entity, ReadyModel )
 createWall position model =
+    let
+        ( mesh, shadow ) =
+            model.meshes.wallAll
+
+        translateBy : Vector3d Length.Meters WorldCoordinates
+        translateBy =
+            position
+                |> Hex.toPoint2d hexMapLayout
+                |> Point3d.on SketchPlane3d.xy
+                |> Vector3d.from Point3d.origin
+    in
     model
         |> Ecs.Entity.create ecsConfigSpec
-        |> Ecs.Entity.with ( colorSpec, "black" )
+        |> Ecs.Entity.with
+            ( staticMeshSpec
+            , Scene3d.meshWithShadow
+                (Scene3d.Material.metal
+                    { baseColor = Color.darkBlue
+                    , roughness = 0.5
+                    }
+                )
+                mesh
+                shadow
+                |> Scene3d.translateBy translateBy
+            )
         |> Ecs.Entity.with ( trapSpec, Trap )
         |> Ecs.Entity.with ( positionSpec, position )
 
@@ -595,11 +670,34 @@ updateInitializing cfg msg model =
 initReady : { currentTime : Time.Posix, meshes : Meshes } -> Tea Model Msg
 initReady cfg =
     let
-        tilemap : Hex.Map (Maybe Ecs.Entity)
+        ( mesh, shadow ) =
+            cfg.meshes.hexTile
+
+        to3dEntity : Hex -> Scene3d.Entity WorldCoordinates
+        to3dEntity hex =
+            let
+                translateBy : Vector3d Length.Meters WorldCoordinates
+                translateBy =
+                    hex
+                        |> Hex.toPoint2d hexMapLayout
+                        |> Point3d.on SketchPlane3d.xy
+                        |> Vector3d.from Point3d.origin
+            in
+            Scene3d.meshWithShadow
+                (Scene3d.Material.metal
+                    { baseColor = Color.gray
+                    , roughness = 0.5
+                    }
+                )
+                mesh
+                shadow
+                |> Scene3d.translateBy translateBy
+
+        tilemap : Hex.Map ( Scene3d.Entity WorldCoordinates, Maybe Ecs.Entity )
         tilemap =
             Hex.origin
                 |> Hex.circle 5
-                |> List.map (\hex -> ( Hex.toKey hex, Nothing ))
+                |> List.map (\hex -> ( Hex.toKey hex, ( to3dEntity hex, Nothing ) ))
                 |> Dict.fromList
     in
     { tilemap = tilemap
@@ -627,6 +725,7 @@ initReady cfg =
     -- ECS
     , ecsConfig = Ecs.Config.init
     , colorComponent = Ecs.Component.empty
+    , staticMeshComponent = Ecs.Component.empty
     , positionComponent = Ecs.Component.empty
     , healthComponent = Ecs.Component.empty
     , pathComponent = Ecs.Component.empty
@@ -706,11 +805,11 @@ updateReady cfg msg model =
                                     model
                                         |> Tea.save
 
-                                Just (Just _) ->
+                                Just ( _, Just _ ) ->
                                     model
                                         |> Tea.save
 
-                                Just Nothing ->
+                                Just ( _, Nothing ) ->
                                     case model.trapType of
                                         AttackTower ->
                                             createTrap createAttackTower 100 clickedHex model
@@ -735,11 +834,11 @@ createTrap createFn cost hex model =
                 model
                     |> Tea.save
 
-            Just (Just _) ->
+            Just ( _, Just _ ) ->
                 model
                     |> Tea.save
 
-            Just Nothing ->
+            Just ( entity3d, Nothing ) ->
                 { model
                     | currency = model.currency - cost
                 }
@@ -749,7 +848,7 @@ createTrap createFn cost hex model =
                                 | tilemap =
                                     Dict.insert
                                         key
-                                        (Just tower)
+                                        ( entity3d, Just tower )
                                         model.tilemap
                             }
                        )
@@ -1107,11 +1206,9 @@ viewReady model =
             , background = Scene3d.backgroundColor Color.black
             , entities =
                 List.concat
-                    [ model.tilemap
-                        |> viewHexGridMap3d model.meshes.hexTile
+                    [ viewHexGridMap3d model.tilemap
                     , viewEnemies3d model
-                    , viewTowers3d model
-                    , viewPlayers3d model
+                    , viewStaticMeshes model
                     , viewAttacks3d model
                     ]
             }
@@ -1222,130 +1319,18 @@ viewEnemies3d model =
         []
 
 
-viewTowers3d : ReadyModel -> List (Scene3d.Entity WorldCoordinates)
-viewTowers3d model =
-    let
-        ( laserMesh, laserShadow ) =
-            model.meshes.laserTower
-
-        ( wallMesh, wallShadow ) =
-            model.meshes.wallAll
-    in
-    Ecs.System.indexedFoldl3
-        (\entity position _ _ acc ->
-            let
-                translateBy : Vector3d Length.Meters WorldCoordinates
-                translateBy =
-                    position
-                        |> Hex.toPoint2d hexMapLayout
-                        |> Point3d.on SketchPlane3d.xy
-                        |> Vector3d.from Point3d.origin
-            in
-            case Ecs.Component.get entity model.attackStyleComponent of
-                Just _ ->
-                    (Scene3d.meshWithShadow
-                        (Scene3d.Material.metal
-                            { baseColor = Color.green
-                            , roughness = 0.5
-                            }
-                        )
-                        laserMesh
-                        laserShadow
-                        |> Scene3d.translateBy translateBy
-                    )
-                        :: acc
-
-                Nothing ->
-                    (Scene3d.meshWithShadow
-                        (Scene3d.Material.metal
-                            { baseColor = Color.darkBlue
-                            , roughness = 0.5
-                            }
-                        )
-                        wallMesh
-                        wallShadow
-                        |> Scene3d.translateBy translateBy
-                    )
-                        :: acc
-        )
-        model.positionComponent
-        model.colorComponent
-        model.trapComponent
+viewStaticMeshes : ReadyModel -> List (Scene3d.Entity WorldCoordinates)
+viewStaticMeshes model =
+    Ecs.System.foldl (::)
+        model.staticMeshComponent
         []
 
 
-viewPlayers3d : ReadyModel -> List (Scene3d.Entity WorldCoordinates)
-viewPlayers3d model =
-    let
-        ( mesh, shadow ) =
-            model.meshes.thingToProtect
-    in
-    Ecs.System.foldl3
-        (\_ position _ acc ->
-            let
-                translateBy : Vector3d Length.Meters WorldCoordinates
-                translateBy =
-                    position
-                        |> Hex.toPoint2d hexMapLayout
-                        |> Point3d.on SketchPlane3d.xy
-                        |> Point3d.translateIn Direction3d.positiveZ (Length.meters 2)
-                        |> Vector3d.from Point3d.origin
-            in
-            (Scene3d.meshWithShadow
-                (Scene3d.Material.metal
-                    { baseColor = Color.lightOrange
-                    , roughness = 0.5
-                    }
-                )
-                mesh
-                shadow
-                |> Scene3d.translateBy translateBy
-            )
-                :: acc
-        )
-        model.playerComponent
-        model.positionComponent
-        model.colorComponent
-        []
-
-
-viewHexGridMap3d :
-    ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
-    -> Hex.Map (Maybe Ecs.Entity)
-    -> List (Scene3d.Entity WorldCoordinates)
-viewHexGridMap3d ( mesh, shadow ) hexMap =
-    let
-        to3dEntity : Hex -> Scene3d.Entity WorldCoordinates
-        to3dEntity hex =
-            let
-                translateBy : Vector3d Length.Meters WorldCoordinates
-                translateBy =
-                    hex
-                        |> Hex.toPoint2d hexMapLayout
-                        |> Point3d.on SketchPlane3d.xy
-                        |> Vector3d.from Point3d.origin
-            in
-            Scene3d.meshWithShadow
-                (Scene3d.Material.metal
-                    { baseColor = Color.gray
-                    , roughness = 0.5
-                    }
-                )
-                mesh
-                shadow
-                |> Scene3d.translateBy translateBy
-    in
+viewHexGridMap3d : Hex.Map ( Scene3d.Entity WorldCoordinates, Maybe Ecs.Entity ) -> List (Scene3d.Entity WorldCoordinates)
+viewHexGridMap3d hexMap =
     hexMap
-        |> Dict.toList
-        |> List.map
-            (\( key, _ ) ->
-                let
-                    hex : Hex
-                    hex =
-                        Hex.fromKey key
-                in
-                to3dEntity hex
-            )
+        |> Dict.values
+        |> List.map Tuple.first
 
 
 meter : { percent : Float, color : String } -> Html msg
