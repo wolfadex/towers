@@ -4,6 +4,8 @@ Having fun building a tower defense game.
 
 ## Play
 
+[![Netlify Status](https://api.netlify.com/api/v1/badges/85827c51-abc3-4469-98eb-264916ac522b/deploy-status)](https://app.netlify.com/sites/hex-tower/deploys)
+
 Play at https://hex-tower.netlify.app/
 
 
