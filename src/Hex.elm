@@ -868,7 +868,7 @@ flatOrientation =
 
 {-| Turn Hex coordinates into a Point location on a Layout
 -}
-toPoint2d : Layout -> Hex -> Point2d Pixels coordinates
+toPoint2d : Layout -> Hex -> Point2d units coordinates
 toPoint2d layout hex =
     let
         { f0, f1, f2, f3 } =
@@ -896,12 +896,12 @@ toPoint2d layout hex =
         y =
             precision 2 <| (((f2 * q) + (f3 * r)) * yl) + yo
     in
-    Point2d.pixels x y
+    Point2d.unsafe { x = x, y = y }
 
 
 {-| Turn Point coordinates on a Layout into a Hex coordinates
 -}
-fromPoint2d : Layout -> Point2d Pixels coordinates -> Hex
+fromPoint2d : Layout -> Point2d units coordinates -> Hex
 fromPoint2d layout point =
     let
         { f0, f1, f2, f3 } =
@@ -914,7 +914,7 @@ fromPoint2d layout point =
             layout.origin
 
         { x, y } =
-            Point2d.toPixels point
+            Point2d.unwrap point
 
         x1 : Float
         x1 =

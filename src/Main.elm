@@ -102,7 +102,7 @@ update msg model =
 
             --
             GameStart ->
-                Game.init { toModel = Game, toMsg = GameMsg, currentTime = 0 }
+                Game.init { toModel = Game, toMsg = GameMsg }
 
 
 

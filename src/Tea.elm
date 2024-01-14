@@ -3,7 +3,9 @@ module Tea exposing
     , save
     , withCmd, withReply
     , map, mapSub, mapView
+    , mapModel, mapMsg
     , toTuple
+    , fromTuple
     )
 
 {-|
@@ -15,8 +17,10 @@ module Tea exposing
 @docs withCmd, withReply
 
 @docs map, mapSub, mapView
+@docs mapModel, mapMsg
 
 @docs toTuple
+@docs fromTuple
 
 -}
 
@@ -61,6 +65,15 @@ toTuple (Tea tea) =
     )
 
 
+fromTuple : ( model, Cmd msg ) -> Tea model msg
+fromTuple ( model, cmd ) =
+    Tea
+        { model = model
+        , commands = [ cmd ]
+        , callbacks = []
+        }
+
+
 map : { a | toModel : modelA -> modelB, toMsg : msgA -> msgB } -> Tea modelA msgA -> Tea modelB msgB
 map cfg (Tea tea) =
     Tea
@@ -78,3 +91,13 @@ mapSub cfg sub =
 mapView : { a | toMsg : msgA -> msgB } -> Html msgA -> Html msgB
 mapView cfg view =
     Html.map cfg.toMsg view
+
+
+mapModel : (modelA -> modelB) -> Tea modelA msg -> Tea modelB msg
+mapModel toModel =
+    map { toModel = toModel, toMsg = identity }
+
+
+mapMsg : (msgA -> msgB) -> Tea model msgA -> Tea model msgB
+mapMsg toMsg =
+    map { toModel = identity, toMsg = toMsg }

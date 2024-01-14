@@ -5,11 +5,11 @@ module Game exposing
     , Enemy(..)
     , Health
     , Model
-    , Msg(..)
+    , Msg
     , Player(..)
     , ScreenCoordinates(..)
-    , Tower(..)
-    , TowerCreationType
+    , Trap(..)
+    , TrapType
     , Wave(..)
     , WorldCoordinates(..)
     , init
@@ -19,39 +19,59 @@ module Game exposing
     )
 
 import AStar.Generalised
+import Angle
+import Axis3d
 import Basics.Extra
 import Browser.Events
+import Camera3d exposing (Camera3d)
 import Circle2d
+import Color
 import Css
 import Css.Color
 import Dict
+import Direction3d
 import Duration exposing (Duration)
 import Ecs
 import Ecs.Component
 import Ecs.Config
 import Ecs.Entity
 import Ecs.System
+import Frame3d
 import Geometry.Svg
 import Hex exposing (Hex)
 import Html exposing (Html)
 import Html.Attributes
 import Html.Events
+import Http
+import Json.Decode
 import Length
 import LineSegment2d
 import List.Extra
+import Obj.Decode
 import Pixels exposing (Pixels)
+import Plane3d
 import Point2d exposing (Point2d)
+import Point3d exposing (Point3d)
 import Quantity exposing (Quantity)
 import Random
 import Random.List
+import Rectangle2d
+import Scene3d
+import Scene3d.Material
+import Scene3d.Mesh
 import Set
+import SketchPlane3d
 import Svg exposing (Svg)
 import Svg.Attributes
-import Svg.Events
+import Task exposing (Task)
+import Task.Parallel
 import Tea exposing (Tea)
 import Time
+import TriangularMesh exposing (TriangularMesh)
 import Util.Ecs.Component
 import Util.Maybe
+import Vector3d exposing (Vector3d)
+import Viewpoint3d
 
 
 
@@ -60,7 +80,16 @@ import Util.Maybe
 -----------
 
 
-type alias Model =
+type Model
+    = Initializing InitializingModel
+    | Ready ReadyModel
+
+
+type alias InitializingModel =
+    Task.Parallel.State2 Msg GameMesh GameMesh
+
+
+type alias ReadyModel =
     { tilemap : Hex.Map (Maybe Ecs.Entity)
     , cameraPosition : Point2d Pixels ScreenCoordinates
     , seed : Random.Seed
@@ -68,7 +97,8 @@ type alias Model =
     , currency : Int
     , waves : Maybe Wave
     , tillNextWave : Maybe { initial : Duration, remaining : Duration }
-    , towerCreationType : TowerCreationType
+    , trapType : TrapType
+    , meshes : Meshes
 
     -- ECS
     , ecsConfig : Ecs.Config
@@ -83,14 +113,23 @@ type alias Model =
             }
     , playerComponent : Ecs.Component Player
     , enemyComponent : Ecs.Component Enemy
-    , towerComponent : Ecs.Component Tower
+    , trapComponent : Ecs.Component Trap
     , delayComponent : Ecs.Component Delay
     , attackStyleComponent : Ecs.Component AttackStyle
     , attackAnimationComponent : Ecs.Component AttackAnimation
     }
 
 
-type TowerCreationType
+type alias Meshes =
+    { laserTower : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
+    , hexTile : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
+
+    -- , wall : TriangularMesh
+    -- , enemy : TriangularMesh
+    }
+
+
+type TrapType
     = AttackTower
     | Wall
 
@@ -103,21 +142,21 @@ type WorldCoordinates
     = WorldCoordinates Never
 
 
-ecsConfigSpec : Ecs.Config.Spec Model
+ecsConfigSpec : Ecs.Config.Spec ReadyModel
 ecsConfigSpec =
     { get = .ecsConfig
     , set = \config world -> { world | ecsConfig = config }
     }
 
 
-colorSpec : Ecs.Component.Spec String Model
+colorSpec : Ecs.Component.Spec String ReadyModel
 colorSpec =
     { get = .colorComponent
     , set = \colorComponent world -> { world | colorComponent = colorComponent }
     }
 
 
-positionSpec : Ecs.Component.Spec Hex Model
+positionSpec : Ecs.Component.Spec Hex ReadyModel
 positionSpec =
     { get = .positionComponent
     , set = \positionComponent world -> { world | positionComponent = positionComponent }
@@ -130,7 +169,7 @@ type alias Health =
     }
 
 
-healthSpec : Ecs.Component.Spec Health Model
+healthSpec : Ecs.Component.Spec Health ReadyModel
 healthSpec =
     { get = .healthComponent
     , set = \healthComponent world -> { world | healthComponent = healthComponent }
@@ -143,7 +182,7 @@ pathSpec :
         , distance : Float
         , point : Point2d Pixels WorldCoordinates
         }
-        Model
+        ReadyModel
 pathSpec =
     { get = .pathComponent
     , set = \pathComponent world -> { world | pathComponent = pathComponent }
@@ -154,7 +193,7 @@ type Player
     = Player
 
 
-playerSpec : Ecs.Component.Spec Player Model
+playerSpec : Ecs.Component.Spec Player ReadyModel
 playerSpec =
     { get = .playerComponent
     , set = \playerComponent world -> { world | playerComponent = playerComponent }
@@ -165,21 +204,21 @@ type Enemy
     = Enemy
 
 
-enemySpec : Ecs.Component.Spec Enemy Model
+enemySpec : Ecs.Component.Spec Enemy ReadyModel
 enemySpec =
     { get = .enemyComponent
     , set = \enemyComponent world -> { world | enemyComponent = enemyComponent }
     }
 
 
-type Tower
-    = Tower
+type Trap
+    = Trap
 
 
-towerSpec : Ecs.Component.Spec Tower Model
-towerSpec =
-    { get = .towerComponent
-    , set = \towerComponent world -> { world | towerComponent = towerComponent }
+trapSpec : Ecs.Component.Spec Trap ReadyModel
+trapSpec =
+    { get = .trapComponent
+    , set = \trapComponent world -> { world | trapComponent = trapComponent }
     }
 
 
@@ -189,7 +228,7 @@ type alias Delay =
     }
 
 
-delaySpec : Ecs.Component.Spec Delay Model
+delaySpec : Ecs.Component.Spec Delay ReadyModel
 delaySpec =
     { get = .delayComponent
     , set = \delayComponent world -> { world | delayComponent = delayComponent }
@@ -200,7 +239,7 @@ type AttackStyle
     = Laser
 
 
-attackStyleSpec : Ecs.Component.Spec AttackStyle Model
+attackStyleSpec : Ecs.Component.Spec AttackStyle ReadyModel
 attackStyleSpec =
     { get = .attackStyleComponent
     , set = \attackStyleComponent world -> { world | attackStyleComponent = attackStyleComponent }
@@ -216,7 +255,7 @@ type AttackAnimation
         }
 
 
-attackAnimationSpec : Ecs.Component.Spec AttackAnimation Model
+attackAnimationSpec : Ecs.Component.Spec AttackAnimation ReadyModel
 attackAnimationSpec =
     { get = .attackAnimationComponent
     , set = \attackAnimationComponent world -> { world | attackAnimationComponent = attackAnimationComponent }
@@ -229,50 +268,64 @@ attackAnimationSpec =
 ----------
 
 
-init : { toMsg : Msg -> msg, toModel : Model -> model, currentTime : Int } -> Tea model msg
+init : { toMsg : Msg -> msg, toModel : Model -> model } -> Tea model msg
 init cfg =
-    let
-        tilemap : Hex.Map (Maybe Ecs.Entity)
-        tilemap =
-            Hex.origin
-                |> Hex.circle 5
-                |> List.map (\hex -> ( Hex.toKey hex, Nothing ))
-                |> Dict.fromList
-    in
-    { tilemap = tilemap
-    , cameraPosition = Point2d.origin
-    , seed = Random.initialSeed cfg.currentTime
-    , lastTimestamp = Time.millisToPosix cfg.currentTime
-    , currency = 500
-    , waves =
-        FinalWave 7
-            |> NextWave 5 (Duration.seconds 10)
-            |> NextWave 3 (Duration.seconds 10)
-            |> NextWave 2 (Duration.seconds 10)
-            |> Just
-    , tillNextWave =
-        Just
-            { initial = Duration.seconds 1
-            , remaining = Duration.seconds 1
-            }
-    , towerCreationType = AttackTower
-
-    -- ECS
-    , ecsConfig = Ecs.Config.init
-    , colorComponent = Ecs.Component.empty
-    , positionComponent = Ecs.Component.empty
-    , healthComponent = Ecs.Component.empty
-    , pathComponent = Ecs.Component.empty
-    , playerComponent = Ecs.Component.empty
-    , enemyComponent = Ecs.Component.empty
-    , towerComponent = Ecs.Component.empty
-    , delayComponent = Ecs.Component.empty
-    , attackStyleComponent = Ecs.Component.empty
-    , attackAnimationComponent = Ecs.Component.empty
-    }
-        |> createPlayer
-        |> Tea.save
+    loadMeshes
+        |> Tea.fromTuple
+        |> Tea.mapModel Initializing
         |> Tea.map cfg
+
+
+getMesh : String -> Task Http.Error GameMesh
+getMesh fileName =
+    Http.task
+        { method = "GET"
+        , url = "mesh/" ++ fileName ++ ".obj"
+        , resolver =
+            Obj.Decode.decodeString
+                Length.meters
+                (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
+                |> decodeStringResolver
+                |> Http.stringResolver
+        , body = Http.emptyBody
+        , headers = []
+        , timeout = Nothing
+        }
+
+
+decodeStringResolver : (String -> Result String a) -> Http.Response String -> Result Http.Error a
+decodeStringResolver stringDecoder response =
+    case response of
+        Http.BadUrl_ url ->
+            Err (Http.BadUrl url)
+
+        Http.Timeout_ ->
+            Err Http.Timeout
+
+        Http.NetworkError_ ->
+            Err Http.NetworkError
+
+        Http.BadStatus_ metadata _ ->
+            Err (Http.BadStatus metadata.statusCode)
+
+        Http.GoodStatus_ _ body ->
+            case stringDecoder body of
+                Err err ->
+                    Err (Http.BadBody err)
+
+                Ok good ->
+                    Ok good
+
+
+loadMeshes : ( Task.Parallel.State2 Msg GameMesh GameMesh, Cmd Msg )
+loadMeshes =
+    Task.Parallel.attempt2
+        { task1 = getMesh "laser_tower"
+        , task2 = getMesh "ground_hex"
+        , onUpdates = MeshesLoading
+        , onFailure = MeshesLoadFailed
+        , onSuccess = MeshesLoaded
+        }
 
 
 type Wave
@@ -280,7 +333,7 @@ type Wave
     | NextWave Int Duration Wave
 
 
-createPlayer : Model -> Model
+createPlayer : ReadyModel -> ReadyModel
 createPlayer model =
     model
         |> Ecs.Entity.create ecsConfigSpec
@@ -291,7 +344,7 @@ createPlayer model =
         |> Tuple.second
 
 
-createEnemy : Model -> Model
+createEnemy : ReadyModel -> ReadyModel
 createEnemy model =
     let
         edgeHexes : List Hex
@@ -396,7 +449,7 @@ findPath cfg =
         |> List.map Hex.fromKey
 
 
-removeEnemy : Ecs.Entity -> Model -> Model
+removeEnemy : Ecs.Entity -> ReadyModel -> ReadyModel
 removeEnemy entity model =
     ( entity, { model | currency = model.currency + 10 } )
         |> Ecs.Entity.remove colorSpec
@@ -407,12 +460,12 @@ removeEnemy entity model =
         |> Tuple.second
 
 
-createAttackTower : Hex -> Model -> ( Ecs.Entity, Model )
+createAttackTower : Hex -> ReadyModel -> ( Ecs.Entity, ReadyModel )
 createAttackTower position model =
     model
         |> Ecs.Entity.create ecsConfigSpec
         |> Ecs.Entity.with ( colorSpec, "chartreuse" )
-        |> Ecs.Entity.with ( towerSpec, Tower )
+        |> Ecs.Entity.with ( trapSpec, Trap )
         |> Ecs.Entity.with ( attackStyleSpec, Laser )
         |> Ecs.Entity.with ( positionSpec, position )
         |> Ecs.Entity.with
@@ -423,12 +476,12 @@ createAttackTower position model =
             )
 
 
-createWall : Hex -> Model -> ( Ecs.Entity, Model )
+createWall : Hex -> ReadyModel -> ( Ecs.Entity, ReadyModel )
 createWall position model =
     model
         |> Ecs.Entity.create ecsConfigSpec
         |> Ecs.Entity.with ( colorSpec, "black" )
-        |> Ecs.Entity.with ( towerSpec, Tower )
+        |> Ecs.Entity.with ( trapSpec, Trap )
         |> Ecs.Entity.with ( positionSpec, position )
 
 
@@ -439,9 +492,14 @@ createWall position model =
 
 
 subscriptions : { toMsg : Msg -> msg } -> Model -> Sub msg
-subscriptions cfg _ =
-    Browser.Events.onAnimationFrame Tick
-        |> Tea.mapSub cfg
+subscriptions cfg model =
+    case model of
+        Initializing _ ->
+            Sub.none
+
+        Ready _ ->
+            Browser.Events.onAnimationFrame Tick
+                |> Tea.mapSub cfg
 
 
 
@@ -452,48 +510,217 @@ subscriptions cfg _ =
 
 type Msg
     = Tick Time.Posix
-    | HexSelected Hex
-    | TowerTypeSelected TowerCreationType
+    | Clicked (Point2d Pixels ScreenCoordinates)
+    | TrapTypeSelected TrapType
+    | MeshesLoading (Task.Parallel.Msg2 GameMesh GameMesh)
+    | MeshesLoadFailed Http.Error
+    | MeshesLoaded GameMesh GameMesh
+    | TimeInitialized Meshes Time.Posix
+
+
+type alias GameMesh =
+    TriangularMesh
+        { normal : Vector3d Quantity.Unitless WorldCoordinates
+        , position : Point3d Length.Meters WorldCoordinates
+        , uv : ( Float, Float )
+        }
 
 
 update : { toMsg : Msg -> msg, toModel : Model -> model } -> Msg -> Model -> Tea model msg
 update cfg msg model =
+    case model of
+        Initializing meshLoadingModel ->
+            updateInitializing cfg msg meshLoadingModel
+
+        Ready readyModel ->
+            updateReady cfg msg readyModel
+
+
+updateInitializing : { toMsg : Msg -> msg, toModel : Model -> model } -> Msg -> InitializingModel -> Tea model msg
+updateInitializing cfg msg model =
     Tea.map cfg <|
         case msg of
-            Tick currentTimestamp ->
+            MeshesLoading msg_ ->
                 let
-                    deltaTime : Duration
-                    deltaTime =
-                        (Time.posixToMillis currentTimestamp - Time.posixToMillis model.lastTimestamp)
-                            |> toFloat
-                            |> Duration.milliseconds
+                    ( nextMeshLoadingModel, meshLoadingCmd ) =
+                        Task.Parallel.update2 model msg_
                 in
-                { model
-                    | lastTimestamp = currentTimestamp
-                }
-                    |> applyWave deltaTime
-                    |> attackAnimationUpdate deltaTime
-                    |> towerAttack deltaTime
-                    |> moveEnemy deltaTime
-                    |> enemyAttack
+                nextMeshLoadingModel
+                    |> Initializing
                     |> Tea.save
+                    |> Tea.withCmd meshLoadingCmd
 
-            TowerTypeSelected towerCreationType ->
-                { model
-                    | towerCreationType = towerCreationType
-                }
+            MeshesLoadFailed _ ->
+                Debug.todo "Failed to load meshes"
+
+            MeshesLoaded laserTowerMesh hexTileMesh ->
+                model
+                    |> Initializing
                     |> Tea.save
+                    |> Tea.withCmd
+                        (Time.now
+                            |> Task.perform
+                                (TimeInitialized
+                                    { laserTower =
+                                        let
+                                            mesh =
+                                                Scene3d.Mesh.texturedFaces laserTowerMesh
+                                        in
+                                        ( mesh
+                                        , Scene3d.Mesh.shadow mesh
+                                        )
+                                    , hexTile =
+                                        let
+                                            mesh =
+                                                Scene3d.Mesh.texturedFaces hexTileMesh
+                                        in
+                                        ( mesh
+                                        , Scene3d.Mesh.shadow mesh
+                                        )
+                                    }
+                                )
+                        )
 
-            HexSelected hex ->
-                case model.towerCreationType of
-                    AttackTower ->
-                        createTower createAttackTower 100 hex model
+            TimeInitialized meshes currentTime ->
+                initReady
+                    { currentTime = currentTime
+                    , meshes = meshes
+                    }
 
-                    Wall ->
-                        createTower createWall 50 hex model
+            _ ->
+                Debug.todo "Unexpected message"
 
 
-createTower : (Hex -> Model -> ( Ecs.Entity, Model )) -> Int -> Hex -> Model -> Tea Model Msg
+initReady : { currentTime : Time.Posix, meshes : Meshes } -> Tea Model Msg
+initReady cfg =
+    let
+        tilemap : Hex.Map (Maybe Ecs.Entity)
+        tilemap =
+            Hex.origin
+                |> Hex.circle 5
+                |> List.map (\hex -> ( Hex.toKey hex, Nothing ))
+                |> Dict.fromList
+    in
+    { tilemap = tilemap
+    , cameraPosition = Point2d.origin
+    , seed =
+        cfg.currentTime
+            |> Time.posixToMillis
+            |> Random.initialSeed
+    , lastTimestamp = cfg.currentTime
+    , currency = 500
+    , waves =
+        FinalWave 7
+            |> NextWave 5 (Duration.seconds 10)
+            |> NextWave 3 (Duration.seconds 10)
+            |> NextWave 2 (Duration.seconds 10)
+            |> Just
+    , tillNextWave =
+        Just
+            { initial = Duration.seconds 1
+            , remaining = Duration.seconds 1
+            }
+    , trapType = AttackTower
+    , meshes = cfg.meshes
+
+    -- ECS
+    , ecsConfig = Ecs.Config.init
+    , colorComponent = Ecs.Component.empty
+    , positionComponent = Ecs.Component.empty
+    , healthComponent = Ecs.Component.empty
+    , pathComponent = Ecs.Component.empty
+    , playerComponent = Ecs.Component.empty
+    , enemyComponent = Ecs.Component.empty
+    , trapComponent = Ecs.Component.empty
+    , delayComponent = Ecs.Component.empty
+    , attackStyleComponent = Ecs.Component.empty
+    , attackAnimationComponent = Ecs.Component.empty
+    }
+        |> createPlayer
+        |> Ready
+        |> Tea.save
+
+
+updateReady : { toMsg : Msg -> msg, toModel : Model -> model } -> Msg -> ReadyModel -> Tea model msg
+updateReady cfg msg model =
+    Tea.map cfg <|
+        Tea.mapModel Ready <|
+            case msg of
+                Tick currentTimestamp ->
+                    let
+                        deltaTime : Duration
+                        deltaTime =
+                            (Time.posixToMillis currentTimestamp - Time.posixToMillis model.lastTimestamp)
+                                |> toFloat
+                                |> Duration.milliseconds
+                    in
+                    { model
+                        | lastTimestamp = currentTimestamp
+                    }
+                        |> applyWave deltaTime
+                        |> attackAnimationUpdate deltaTime
+                        |> towerAttack deltaTime
+                        |> moveEnemy deltaTime
+                        |> enemyAttack
+                        |> Tea.save
+
+                TrapTypeSelected trapType ->
+                    { model
+                        | trapType = trapType
+                    }
+                        |> Tea.save
+
+                Clicked screenPoint ->
+                    let
+                        screenRectangle =
+                            Rectangle2d.with
+                                { x1 = Pixels.pixels 0
+                                , y1 = Pixels.pixels 600
+                                , x2 = Pixels.pixels 800
+                                , y2 = Pixels.pixels 0
+                                }
+
+                        maybeClickedPoint =
+                            Camera3d.ray
+                                defaultCamera
+                                screenRectangle
+                                screenPoint
+                                |> Axis3d.intersectionWithPlane Plane3d.xy
+                    in
+                    case maybeClickedPoint of
+                        Nothing ->
+                            model
+                                |> Tea.save
+
+                        Just clickedPoint ->
+                            let
+                                clickedHex =
+                                    clickedPoint
+                                        |> Point3d.projectInto SketchPlane3d.xy
+                                        |> Hex.fromPoint2d hexMapLayout
+                            in
+                            case Dict.get (Hex.toKey clickedHex) model.tilemap of
+                                Nothing ->
+                                    model
+                                        |> Tea.save
+
+                                Just (Just _) ->
+                                    model
+                                        |> Tea.save
+
+                                Just Nothing ->
+                                    case model.trapType of
+                                        AttackTower ->
+                                            createTower createAttackTower 100 clickedHex model
+
+                                        Wall ->
+                                            createTower createWall 50 clickedHex model
+
+                _ ->
+                    Debug.todo "Unexpected message"
+
+
+createTower : (Hex -> ReadyModel -> ( Ecs.Entity, ReadyModel )) -> Int -> Hex -> ReadyModel -> Tea ReadyModel Msg
 createTower createFn cost hex model =
     if model.currency >= cost then
         let
@@ -531,10 +758,10 @@ createTower createFn cost hex model =
             |> Tea.save
 
 
-applyWave : Duration -> Model -> Model
+applyWave : Duration -> ReadyModel -> ReadyModel
 applyWave deltaTime model =
     let
-        createEnemies : Int -> Maybe Duration -> Maybe Wave -> Model
+        createEnemies : Int -> Maybe Duration -> Maybe Wave -> ReadyModel
         createEnemies enemyCount tillNext rest =
             List.foldl (\_ -> createEnemy)
                 { model
@@ -587,7 +814,7 @@ applyWave deltaTime model =
                         createEnemies enemyCount (Just tillNext) (Just rest)
 
 
-attackAnimationUpdate : Duration -> Model -> Model
+attackAnimationUpdate : Duration -> ReadyModel -> ReadyModel
 attackAnimationUpdate deltaTime =
     Ecs.System.map
         (\attackAnimation ->
@@ -610,7 +837,7 @@ attackAnimationUpdate deltaTime =
         attackAnimationSpec
 
 
-moveEnemy : Duration -> Model -> Model
+moveEnemy : Duration -> ReadyModel -> ReadyModel
 moveEnemy deltaTime =
     Ecs.System.map2
         (\( position, setPosition ) ( { path, distance }, setPath ) ->
@@ -666,7 +893,7 @@ moveEnemy deltaTime =
         pathSpec
 
 
-enemyAttack : Model -> Model
+enemyAttack : ReadyModel -> ReadyModel
 enemyAttack model =
     let
         playerPositions : List ( Ecs.Entity, Hex )
@@ -707,7 +934,7 @@ enemyAttack model =
         model
 
 
-towerAttack : Duration -> Model -> Model
+towerAttack : Duration -> ReadyModel -> ReadyModel
 towerAttack deltaTime model =
     Ecs.System.indexedFoldl3
         (\towerEntity towerPosition _ delay nextModel ->
@@ -789,7 +1016,7 @@ towerAttack deltaTime model =
                                 )
         )
         model.positionComponent
-        model.towerComponent
+        model.trapComponent
         model.delayComponent
         model
 
@@ -803,113 +1030,142 @@ towerAttack deltaTime model =
 view : { toMsg : Msg -> msg } -> Model -> List (Html msg)
 view cfg model =
     List.map (Tea.mapView cfg) <|
-        let
-            resolution : Quantity Float (Quantity.Rate Pixels Length.Meters)
-            resolution =
-                Pixels.pixels 1 |> Quantity.per (Length.millimeters 1)
+        case model of
+            Initializing _ ->
+                [ Html.text "Initializing..." ]
 
-            width : Quantity Float Pixels
-            width =
-                Pixels.pixels 1920
+            Ready readyModel ->
+                viewReady readyModel
 
-            height : Quantity Float Pixels
-            height =
-                Pixels.pixels 1080
 
-            viewBox : String
-            viewBox =
-                String.join " "
-                    [ width
-                        |> Quantity.divideBy -2
-                        |> Quantity.plus (Point2d.xCoordinate model.cameraPosition)
-                        |> Pixels.inPixels
-                        |> String.fromFloat
-                    , height
-                        |> Quantity.divideBy -2
-                        |> Quantity.plus (Point2d.yCoordinate model.cameraPosition)
-                        |> Pixels.inPixels
-                        |> String.fromFloat
-                    , width
-                        |> Pixels.inPixels
-                        |> String.fromFloat
-                    , height
-                        |> Pixels.inPixels
-                        |> String.fromFloat
-                    ]
-        in
-        [ Html.div [ Css.gameHeader ]
-            [ Html.label
-                []
-                [ Html.text "Next wave: "
-                , case model.tillNextWave of
-                    Nothing ->
-                        Html.text "No more waves"
+viewReady : ReadyModel -> List (Html Msg)
+viewReady model =
+    [ Html.div [ Css.gameHeader ]
+        [ Html.label
+            []
+            [ Html.text "Next wave: "
+            , case model.tillNextWave of
+                Nothing ->
+                    Html.text "No more waves"
 
-                    Just tillNextWave ->
-                        meter
-                            { percent =
-                                (Duration.inSeconds tillNextWave.remaining / Duration.inSeconds tillNextWave.initial)
-                                    |> (*) 100
-                            , color = Css.Color.blue
-                            }
-                ]
-            , Ecs.System.foldl2
-                (\_ health acc ->
-                    Html.label
-                        []
-                        [ Html.text "Health: "
-                        , meter
-                            { percent =
-                                (toFloat health.current / toFloat health.max)
-                                    |> (*) 100
-                            , color = Css.Color.yellow
-                            }
-                        ]
-                        :: acc
-                )
-                model.playerComponent
-                model.healthComponent
-                []
-                |> Html.div []
-            , Html.label
-                []
-                [ Html.text "Money: "
-                , Html.text ("¥" ++ String.fromInt model.currency)
-                ]
-            , Html.div []
-                [ Html.button
-                    [ Html.Events.onClick (TowerTypeSelected AttackTower)
-                    ]
-                    [ Html.text "Tower" ]
-                , Html.button
-                    [ Html.Events.onClick (TowerTypeSelected Wall)
-                    ]
-                    [ Html.text "Wall" ]
-                ]
+                Just tillNextWave ->
+                    meter
+                        { percent =
+                            (Duration.inSeconds tillNextWave.remaining / Duration.inSeconds tillNextWave.initial)
+                                |> (*) 100
+                        , color = Css.Color.blue
+                        }
             ]
-        , Svg.svg
-            [ Svg.Attributes.width "100%"
-            , Svg.Attributes.height "100%"
-            , Svg.Attributes.viewBox viewBox
-            , Html.Attributes.attribute "tabindex" "0"
-
-            -- , Html.Events.on "keydown" decodeKeyDown
-            -- , Html.Events.on "keyup" decodeKeyUp
-            ]
-            (List.concat
-                [ [ model.tilemap
-                        |> viewHexGridMap
-                  ]
-                , viewEnemies resolution model
-                , viewTowers resolution model
-                , viewPlayers resolution model
-                , viewAttacks resolution model
-                ]
+        , Ecs.System.foldl2
+            (\_ health acc ->
+                Html.label
+                    []
+                    [ Html.text "Health: "
+                    , meter
+                        { percent =
+                            (toFloat health.current / toFloat health.max)
+                                |> (*) 100
+                        , color = Css.Color.yellow
+                        }
+                    ]
+                    :: acc
             )
+            model.playerComponent
+            model.healthComponent
+            []
+            |> Html.div []
+        , Html.label
+            []
+            [ Html.text "Money: "
+            , Html.text ("¥" ++ String.fromInt model.currency)
+            ]
+        , Html.div []
+            [ Html.button
+                [ Html.Events.onClick (TrapTypeSelected AttackTower)
+                ]
+                [ Html.text "Tower" ]
+            , Html.button
+                [ Html.Events.onClick (TrapTypeSelected Wall)
+                ]
+                [ Html.text "Wall" ]
+            ]
+        ]
+    , Html.div
+        [ Html.Events.on "click" decodeClick
+        , Html.Attributes.style "width" "800px"
+        , Html.Attributes.style "height" "600px"
+        ]
+        [ Scene3d.sunny
+            { upDirection = Direction3d.positiveZ
+            , sunlightDirection = Direction3d.negativeZ
+            , shadows = True
+            , dimensions = ( Pixels.int 800, Pixels.int 600 )
+            , camera = defaultCamera
+            , clipDepth = Length.meters 0.1
+            , background = Scene3d.backgroundColor Color.black
+            , entities =
+                List.concat
+                    [ model.tilemap
+                        |> viewHexGridMap3d model.meshes.hexTile
+
+                    -- , viewEnemies resolution model
+                    , viewTowers3d model
+
+                    -- , viewPlayers resolution model
+                    -- , viewAttacks resolution model
+                    ]
+            }
         ]
 
+    -- , Svg.svg
+    --     [ Svg.Attributes.width "100%"
+    --     , Svg.Attributes.height "100%"
+    --     , Svg.Attributes.viewBox viewBox
+    --     , Html.Attributes.attribute "tabindex" "0"
+    --     -- , Html.Events.on "keydown" decodeKeyDown
+    --     -- , Html.Events.on "keyup" decodeKeyUp
+    --     ]
+    --     (List.concat
+    --         [ [ model.tilemap
+    --                 |> viewHexGridMap
+    --           ]
+    --         , viewEnemies resolution model
+    --         , viewTowers resolution model
+    --         , viewPlayers resolution model
+    --         , viewAttacks resolution model
+    --         ]
+    --     )
+    ]
 
-viewAttacks : Quantity Float (Quantity.Rate Pixels Length.Meters) -> Model -> List (Svg Msg)
+
+defaultCamera : Camera3d Length.Meters WorldCoordinates
+defaultCamera =
+    let
+        cameraViewpoint =
+            Viewpoint3d.lookAt
+                { eyePoint = Point3d.meters 25 0 35
+                , focalPoint = Point3d.origin
+                , upDirection = Direction3d.positiveZ
+                }
+    in
+    Camera3d.perspective
+        { viewpoint = cameraViewpoint
+        , verticalFieldOfView = Angle.degrees 30
+        }
+
+
+decodeClick : Json.Decode.Decoder Msg
+decodeClick =
+    Json.Decode.map2
+        (\x y ->
+            Point2d.pixels x y
+                |> Clicked
+        )
+        (Json.Decode.field "offsetX" Json.Decode.float)
+        (Json.Decode.field "offsetY" Json.Decode.float)
+
+
+viewAttacks : Quantity Float (Quantity.Rate Pixels Length.Meters) -> ReadyModel -> List (Svg Msg)
 viewAttacks resolution model =
     Ecs.System.foldl2
         (\animation style acc ->
@@ -933,7 +1189,7 @@ viewAttacks resolution model =
         []
 
 
-viewEnemies : Quantity Float (Quantity.Rate Pixels Length.Meters) -> Model -> List (Svg Msg)
+viewEnemies : Quantity Float (Quantity.Rate Pixels Length.Meters) -> ReadyModel -> List (Svg Msg)
 viewEnemies resolution model =
     Ecs.System.foldl3
         (\{ point } color _ acc ->
@@ -949,24 +1205,47 @@ viewEnemies resolution model =
         []
 
 
-viewTowers : Quantity Float (Quantity.Rate Pixels Length.Meters) -> Model -> List (Svg Msg)
-viewTowers resolution model =
+viewTowers3d : ReadyModel -> List (Scene3d.Entity WorldCoordinates)
+viewTowers3d model =
+    let
+        ( mesh, shadow ) =
+            model.meshes.laserTower
+    in
     Ecs.System.foldl3
-        (\position color _ acc ->
-            (position
-                |> Hex.toPoint2d hexMapLayout
-                |> Circle2d.withRadius (Pixels.pixels 23)
-                |> Geometry.Svg.circle2d [ Svg.Attributes.fill color ]
+        (\position _ _ acc ->
+            (let
+                translateBy : Vector3d Length.Meters WorldCoordinates
+                translateBy =
+                    position
+                        |> Hex.toPoint2d hexMapLayout
+                        |> Point3d.on SketchPlane3d.xy
+                        |> Vector3d.from Point3d.origin
+             in
+             Scene3d.meshWithShadow
+                (Scene3d.Material.metal
+                    { baseColor = Color.green
+                    , roughness = 0.5
+                    }
+                )
+                mesh
+                shadow
+                |> Scene3d.translateBy translateBy
             )
+                -- (position
+                --     |> Hex.toPoint2d hexMapLayout
+                --     |> Scene3d.translate
+                --     |> Scene3d.color color
+                --     |> Scene3d.mesh model.meshes.attackTower
+                -- )
                 :: acc
         )
         model.positionComponent
         model.colorComponent
-        model.towerComponent
+        model.trapComponent
         []
 
 
-viewPlayers : Quantity Float (Quantity.Rate Pixels Length.Meters) -> Model -> List (Svg Msg)
+viewPlayers : Quantity Float (Quantity.Rate Pixels Length.Meters) -> ReadyModel -> List (Svg Msg)
 viewPlayers resolution model =
     Ecs.System.foldl3
         (\_ position color acc ->
@@ -986,75 +1265,48 @@ viewPlayers resolution model =
 hexMapLayout : Hex.Layout
 hexMapLayout =
     { orientation = Hex.pointyOrientation
-    , size = ( 32, 32 )
-    , origin = ( -160, -160 )
+    , size = ( 1, 1 )
+    , origin = ( 0, 0 )
     }
 
 
-viewHexGridMap : Hex.Map (Maybe Ecs.Entity) -> Svg Msg
-viewHexGridMap hexMap =
+viewHexGridMap3d :
+    ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
+    -> Hex.Map (Maybe Ecs.Entity)
+    -> List (Scene3d.Entity WorldCoordinates)
+viewHexGridMap3d ( mesh, shadow ) hexMap =
     let
-        toSvg : Hex -> Maybe Ecs.Entity -> String -> Svg Msg
-        toSvg hex maybeEntity cornersCoords =
-            Svg.g
-                []
-                (toPolygon hex maybeEntity cornersCoords)
-
-        toPolygon : Hex -> Maybe Ecs.Entity -> String -> List (Svg Msg)
-        toPolygon hex maybeEntity cornersCoords =
-            [ Svg.polygon
-                ((case maybeEntity of
-                    Nothing ->
-                        [ Svg.Attributes.style "cursor: pointer"
-                        , Svg.Events.onClick (HexSelected hex)
-                        ]
-
-                    Just _ ->
-                        []
-                 )
-                    ++ [ Svg.Attributes.stroke "#ffff00"
-                       , Svg.Attributes.strokeWidth "1px"
-                       , Svg.Attributes.fill "#777777"
-                       , Svg.Attributes.points cornersCoords
-                       ]
+        to3dEntity : Hex -> Scene3d.Entity WorldCoordinates
+        to3dEntity hex =
+            let
+                translateBy : Vector3d Length.Meters WorldCoordinates
+                translateBy =
+                    hex
+                        |> Hex.toPoint2d hexMapLayout
+                        |> Point3d.on SketchPlane3d.xy
+                        |> Vector3d.from Point3d.origin
+            in
+            Scene3d.meshWithShadow
+                (Scene3d.Material.metal
+                    { baseColor = Color.gray
+                    , roughness = 0.5
+                    }
                 )
-                []
-            ]
+                mesh
+                shadow
+                |> Scene3d.translateBy translateBy
     in
     hexMap
         |> Dict.toList
         |> List.map
-            (\( key, maybeEntity ) ->
+            (\( key, _ ) ->
                 let
                     hex : Hex
                     hex =
                         Hex.fromKey key
                 in
-                hex
-                    |> mapPolygonCorners
-                    |> pointsToString
-                    |> toSvg hex maybeEntity
+                to3dEntity hex
             )
-        |> Svg.g []
-
-
-{-| Helper to convert points to SVG string coordinates
--}
-pointsToString : List ( Float, Float ) -> String
-pointsToString points =
-    String.join " " (List.map pointToStringCoords points)
-
-
-{-| Helper to convert points to SVG string coordinates
--}
-pointToStringCoords : ( Float, Float ) -> String
-pointToStringCoords ( x, y ) =
-    String.fromFloat x ++ "," ++ String.fromFloat y
-
-
-mapPolygonCorners : Hex -> List ( Float, Float )
-mapPolygonCorners =
-    Hex.polygonCorners hexMapLayout
 
 
 meter : { percent : Float, color : String } -> Html msg
