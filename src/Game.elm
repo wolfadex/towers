@@ -24,7 +24,6 @@ import Axis3d
 import Basics.Extra
 import Browser.Events
 import Camera3d exposing (Camera3d)
-import Circle2d
 import Color
 import Css
 import Css.Color
@@ -37,7 +36,6 @@ import Ecs.Config
 import Ecs.Entity
 import Ecs.System
 import Frame3d
-import Geometry.Svg
 import Hex exposing (Hex)
 import Html exposing (Html)
 import Html.Attributes
@@ -45,14 +43,14 @@ import Html.Events
 import Http
 import Json.Decode
 import Length
-import LineSegment2d
+import LineSegment3d
 import List.Extra
 import Obj.Decode
 import Pixels exposing (Pixels)
 import Plane3d
 import Point2d exposing (Point2d)
 import Point3d exposing (Point3d)
-import Quantity exposing (Quantity)
+import Quantity
 import Random
 import Random.List
 import Rectangle2d
@@ -61,8 +59,6 @@ import Scene3d.Material
 import Scene3d.Mesh
 import Set
 import SketchPlane3d
-import Svg exposing (Svg)
-import Svg.Attributes
 import Task exposing (Task)
 import Task.Parallel
 import Tea exposing (Tea)
@@ -86,7 +82,7 @@ type Model
 
 
 type alias InitializingModel =
-    Task.Parallel.State2 Msg GameMesh GameMesh
+    Task.Parallel.State5 Msg GameMesh GameMesh GameMesh GameMesh GameMesh
 
 
 type alias ReadyModel =
@@ -109,7 +105,7 @@ type alias ReadyModel =
         Ecs.Component
             { path : List Hex
             , distance : Float
-            , point : Point2d Pixels WorldCoordinates
+            , point : Point2d Length.Meters WorldCoordinates
             }
     , playerComponent : Ecs.Component Player
     , enemyComponent : Ecs.Component Enemy
@@ -123,9 +119,9 @@ type alias ReadyModel =
 type alias Meshes =
     { laserTower : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
     , hexTile : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
-
-    -- , wall : TriangularMesh
-    -- , enemy : TriangularMesh
+    , enemySphere : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
+    , wallAll : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
+    , thingToProtect : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
     }
 
 
@@ -180,7 +176,7 @@ pathSpec :
     Ecs.Component.Spec
         { path : List Hex
         , distance : Float
-        , point : Point2d Pixels WorldCoordinates
+        , point : Point2d Length.Meters WorldCoordinates
         }
         ReadyModel
 pathSpec =
@@ -249,8 +245,8 @@ attackStyleSpec =
 type AttackAnimation
     = NoAttack
     | Attacking
-        { from : Point2d Pixels WorldCoordinates
-        , to : Point2d Pixels WorldCoordinates
+        { from : Point2d Length.Meters WorldCoordinates
+        , to : Point2d Length.Meters WorldCoordinates
         , duration : Duration
         }
 
@@ -317,11 +313,17 @@ decodeStringResolver stringDecoder response =
                     Ok good
 
 
-loadMeshes : ( Task.Parallel.State2 Msg GameMesh GameMesh, Cmd Msg )
+loadMeshes :
+    ( Task.Parallel.State5 Msg GameMesh GameMesh GameMesh GameMesh GameMesh
+    , Cmd Msg
+    )
 loadMeshes =
-    Task.Parallel.attempt2
+    Task.Parallel.attempt5
         { task1 = getMesh "laser_tower"
         , task2 = getMesh "ground_hex"
+        , task3 = getMesh "enemy_sphere"
+        , task4 = getMesh "wall_all"
+        , task5 = getMesh "thing_to_protect"
         , onUpdates = MeshesLoading
         , onFailure = MeshesLoadFailed
         , onSuccess = MeshesLoaded
@@ -512,9 +514,9 @@ type Msg
     = Tick Time.Posix
     | Clicked (Point2d Pixels ScreenCoordinates)
     | TrapTypeSelected TrapType
-    | MeshesLoading (Task.Parallel.Msg2 GameMesh GameMesh)
+    | MeshesLoading (Task.Parallel.Msg5 GameMesh GameMesh GameMesh GameMesh GameMesh)
     | MeshesLoadFailed Http.Error
-    | MeshesLoaded GameMesh GameMesh
+    | MeshesLoaded GameMesh GameMesh GameMesh GameMesh GameMesh
     | TimeInitialized Meshes Time.Posix
 
 
@@ -543,17 +545,27 @@ updateInitializing cfg msg model =
             MeshesLoading msg_ ->
                 let
                     ( nextMeshLoadingModel, meshLoadingCmd ) =
-                        Task.Parallel.update2 model msg_
+                        Task.Parallel.update5 model msg_
                 in
                 nextMeshLoadingModel
                     |> Initializing
                     |> Tea.save
                     |> Tea.withCmd meshLoadingCmd
 
-            MeshesLoadFailed _ ->
-                Debug.todo "Failed to load meshes"
+            MeshesLoadFailed err ->
+                Debug.todo (Debug.toString err)
 
-            MeshesLoaded laserTowerMesh hexTileMesh ->
+            MeshesLoaded laserTowerMesh hexTileMesh enemySphereMesh wallAllMesh thingToProtect ->
+                let
+                    initMesh m =
+                        let
+                            mesh =
+                                Scene3d.Mesh.texturedFaces m
+                        in
+                        ( mesh
+                        , Scene3d.Mesh.shadow mesh
+                        )
+                in
                 model
                     |> Initializing
                     |> Tea.save
@@ -561,22 +573,11 @@ updateInitializing cfg msg model =
                         (Time.now
                             |> Task.perform
                                 (TimeInitialized
-                                    { laserTower =
-                                        let
-                                            mesh =
-                                                Scene3d.Mesh.texturedFaces laserTowerMesh
-                                        in
-                                        ( mesh
-                                        , Scene3d.Mesh.shadow mesh
-                                        )
-                                    , hexTile =
-                                        let
-                                            mesh =
-                                                Scene3d.Mesh.texturedFaces hexTileMesh
-                                        in
-                                        ( mesh
-                                        , Scene3d.Mesh.shadow mesh
-                                        )
+                                    { laserTower = initMesh laserTowerMesh
+                                    , hexTile = initMesh hexTileMesh
+                                    , enemySphere = initMesh enemySphereMesh
+                                    , wallAll = initMesh wallAllMesh
+                                    , thingToProtect = initMesh thingToProtect
                                     }
                                 )
                         )
@@ -698,6 +699,7 @@ updateReady cfg msg model =
                                     clickedPoint
                                         |> Point3d.projectInto SketchPlane3d.xy
                                         |> Hex.fromPoint2d hexMapLayout
+                                        |> Hex.toIntCoordinates
                             in
                             case Dict.get (Hex.toKey clickedHex) model.tilemap of
                                 Nothing ->
@@ -711,17 +713,17 @@ updateReady cfg msg model =
                                 Just Nothing ->
                                     case model.trapType of
                                         AttackTower ->
-                                            createTower createAttackTower 100 clickedHex model
+                                            createTrap createAttackTower 100 clickedHex model
 
                                         Wall ->
-                                            createTower createWall 50 clickedHex model
+                                            createTrap createWall 50 clickedHex model
 
                 _ ->
                     Debug.todo "Unexpected message"
 
 
-createTower : (Hex -> ReadyModel -> ( Ecs.Entity, ReadyModel )) -> Int -> Hex -> ReadyModel -> Tea ReadyModel Msg
-createTower createFn cost hex model =
+createTrap : (Hex -> ReadyModel -> ( Ecs.Entity, ReadyModel )) -> Int -> Hex -> ReadyModel -> Tea ReadyModel Msg
+createTrap createFn cost hex model =
     if model.currency >= cost then
         let
             key : Hex.Key
@@ -875,7 +877,7 @@ moveEnemy deltaTime =
                             totalDistance
                                 |> Basics.Extra.fractionalModBy 1.0
 
-                        pointAlong : Point2d Pixels WorldCoordinates
+                        pointAlong : Point2d Length.Meters WorldCoordinates
                         pointAlong =
                             Point2d.interpolateFrom
                                 (Hex.toPoint2d hexMapLayout currentHex)
@@ -1107,34 +1109,13 @@ viewReady model =
                 List.concat
                     [ model.tilemap
                         |> viewHexGridMap3d model.meshes.hexTile
-
-                    -- , viewEnemies resolution model
+                    , viewEnemies3d model
                     , viewTowers3d model
-
-                    -- , viewPlayers resolution model
-                    -- , viewAttacks resolution model
+                    , viewPlayers3d model
+                    , viewAttacks3d model
                     ]
             }
         ]
-
-    -- , Svg.svg
-    --     [ Svg.Attributes.width "100%"
-    --     , Svg.Attributes.height "100%"
-    --     , Svg.Attributes.viewBox viewBox
-    --     , Html.Attributes.attribute "tabindex" "0"
-    --     -- , Html.Events.on "keydown" decodeKeyDown
-    --     -- , Html.Events.on "keyup" decodeKeyUp
-    --     ]
-    --     (List.concat
-    --         [ [ model.tilemap
-    --                 |> viewHexGridMap
-    --           ]
-    --         , viewEnemies resolution model
-    --         , viewTowers resolution model
-    --         , viewPlayers resolution model
-    --         , viewAttacks resolution model
-    --         ]
-    --     )
     ]
 
 
@@ -1154,6 +1135,14 @@ defaultCamera =
         }
 
 
+hexMapLayout : Hex.Layout
+hexMapLayout =
+    { orientation = Hex.pointyOrientation
+    , size = ( 1, 1 )
+    , origin = ( 0, 0 )
+    }
+
+
 decodeClick : Json.Decode.Decoder Msg
 decodeClick =
     Json.Decode.map2
@@ -1165,8 +1154,8 @@ decodeClick =
         (Json.Decode.field "offsetY" Json.Decode.float)
 
 
-viewAttacks : Quantity Float (Quantity.Rate Pixels Length.Meters) -> ReadyModel -> List (Svg Msg)
-viewAttacks resolution model =
+viewAttacks3d : ReadyModel -> List (Scene3d.Entity WorldCoordinates)
+viewAttacks3d model =
     Ecs.System.foldl2
         (\animation style acc ->
             case animation of
@@ -1176,11 +1165,22 @@ viewAttacks resolution model =
                 Attacking { from, to } ->
                     case style of
                         Laser ->
-                            (LineSegment2d.from from to
-                                |> Geometry.Svg.lineSegment2d
-                                    [ Svg.Attributes.stroke "red"
-                                    , Svg.Attributes.strokeWidth "5"
-                                    ]
+                            let
+                                from3d : Point3d Length.Meters WorldCoordinates
+                                from3d =
+                                    from
+                                        |> Point3d.on SketchPlane3d.xy
+                                        |> Point3d.translateIn Direction3d.positiveZ (Length.meters 3.5)
+
+                                to3d : Point3d Length.Meters WorldCoordinates
+                                to3d =
+                                    to
+                                        |> Point3d.on SketchPlane3d.xy
+                                        |> Point3d.translateIn Direction3d.positiveZ (Length.meters 1.5)
+                            in
+                            (LineSegment3d.from from3d to3d
+                                |> Scene3d.lineSegment
+                                    (Scene3d.Material.color Color.red)
                             )
                                 :: acc
         )
@@ -1189,13 +1189,30 @@ viewAttacks resolution model =
         []
 
 
-viewEnemies : Quantity Float (Quantity.Rate Pixels Length.Meters) -> ReadyModel -> List (Svg Msg)
-viewEnemies resolution model =
+viewEnemies3d : ReadyModel -> List (Scene3d.Entity WorldCoordinates)
+viewEnemies3d model =
+    let
+        ( mesh, shadow ) =
+            model.meshes.enemySphere
+    in
     Ecs.System.foldl3
-        (\{ point } color _ acc ->
-            (point
-                |> Circle2d.withRadius (Pixels.pixels 15)
-                |> Geometry.Svg.circle2d [ Svg.Attributes.fill color ]
+        (\{ point } _ _ acc ->
+            (let
+                translateBy : Vector3d Length.Meters WorldCoordinates
+                translateBy =
+                    point
+                        |> Point3d.on SketchPlane3d.xy
+                        |> Vector3d.from Point3d.origin
+             in
+             Scene3d.meshWithShadow
+                (Scene3d.Material.metal
+                    { baseColor = Color.red
+                    , roughness = 0.5
+                    }
+                )
+                mesh
+                shadow
+                |> Scene3d.translateBy translateBy
             )
                 :: acc
         )
@@ -1208,36 +1225,48 @@ viewEnemies resolution model =
 viewTowers3d : ReadyModel -> List (Scene3d.Entity WorldCoordinates)
 viewTowers3d model =
     let
-        ( mesh, shadow ) =
+        ( laserMesh, laserShadow ) =
             model.meshes.laserTower
+
+        ( wallMesh, wallShadow ) =
+            model.meshes.wallAll
     in
-    Ecs.System.foldl3
-        (\position _ _ acc ->
-            (let
+    Ecs.System.indexedFoldl3
+        (\entity position _ _ acc ->
+            let
                 translateBy : Vector3d Length.Meters WorldCoordinates
                 translateBy =
                     position
                         |> Hex.toPoint2d hexMapLayout
                         |> Point3d.on SketchPlane3d.xy
                         |> Vector3d.from Point3d.origin
-             in
-             Scene3d.meshWithShadow
-                (Scene3d.Material.metal
-                    { baseColor = Color.green
-                    , roughness = 0.5
-                    }
-                )
-                mesh
-                shadow
-                |> Scene3d.translateBy translateBy
-            )
-                -- (position
-                --     |> Hex.toPoint2d hexMapLayout
-                --     |> Scene3d.translate
-                --     |> Scene3d.color color
-                --     |> Scene3d.mesh model.meshes.attackTower
-                -- )
-                :: acc
+            in
+            case Ecs.Component.get entity model.attackStyleComponent of
+                Just _ ->
+                    (Scene3d.meshWithShadow
+                        (Scene3d.Material.metal
+                            { baseColor = Color.green
+                            , roughness = 0.5
+                            }
+                        )
+                        laserMesh
+                        laserShadow
+                        |> Scene3d.translateBy translateBy
+                    )
+                        :: acc
+
+                Nothing ->
+                    (Scene3d.meshWithShadow
+                        (Scene3d.Material.metal
+                            { baseColor = Color.darkBlue
+                            , roughness = 0.5
+                            }
+                        )
+                        wallMesh
+                        wallShadow
+                        |> Scene3d.translateBy translateBy
+                    )
+                        :: acc
         )
         model.positionComponent
         model.colorComponent
@@ -1245,14 +1274,32 @@ viewTowers3d model =
         []
 
 
-viewPlayers : Quantity Float (Quantity.Rate Pixels Length.Meters) -> ReadyModel -> List (Svg Msg)
-viewPlayers resolution model =
+viewPlayers3d : ReadyModel -> List (Scene3d.Entity WorldCoordinates)
+viewPlayers3d model =
+    let
+        ( mesh, shadow ) =
+            model.meshes.thingToProtect
+    in
     Ecs.System.foldl3
-        (\_ position color acc ->
-            (position
-                |> Hex.toPoint2d hexMapLayout
-                |> Circle2d.withRadius (Pixels.pixels 23)
-                |> Geometry.Svg.circle2d [ Svg.Attributes.fill color ]
+        (\_ position _ acc ->
+            let
+                translateBy : Vector3d Length.Meters WorldCoordinates
+                translateBy =
+                    position
+                        |> Hex.toPoint2d hexMapLayout
+                        |> Point3d.on SketchPlane3d.xy
+                        |> Point3d.translateIn Direction3d.positiveZ (Length.meters 2)
+                        |> Vector3d.from Point3d.origin
+            in
+            (Scene3d.meshWithShadow
+                (Scene3d.Material.metal
+                    { baseColor = Color.lightOrange
+                    , roughness = 0.5
+                    }
+                )
+                mesh
+                shadow
+                |> Scene3d.translateBy translateBy
             )
                 :: acc
         )
@@ -1260,14 +1307,6 @@ viewPlayers resolution model =
         model.positionComponent
         model.colorComponent
         []
-
-
-hexMapLayout : Hex.Layout
-hexMapLayout =
-    { orientation = Hex.pointyOrientation
-    , size = ( 1, 1 )
-    , origin = ( 0, 0 )
-    }
 
 
 viewHexGridMap3d :

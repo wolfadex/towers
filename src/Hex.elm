@@ -76,7 +76,6 @@ Forked from <https://github.com/Voronchuk/hexagons>
 -}
 
 import Dict exposing (Dict)
-import Pixels exposing (Pixels)
 import Point2d exposing (Point2d)
 
 
