@@ -78,6 +78,7 @@ import Viewpoint3d
 
 type Model
     = Initializing InitializingModel
+    | InitializingFailed String
     | Ready ReadyModel
 
 
@@ -574,6 +575,9 @@ subscriptions cfg model =
         Initializing _ ->
             Sub.none
 
+        InitializingFailed _ ->
+            Sub.none
+
         Ready _ ->
             Browser.Events.onAnimationFrame Tick
                 |> Tea.mapSub cfg
@@ -609,6 +613,11 @@ update cfg msg model =
         Initializing meshLoadingModel ->
             updateInitializing cfg msg meshLoadingModel
 
+        InitializingFailed _ ->
+            model
+                |> Tea.save
+                |> Tea.map cfg
+
         Ready readyModel ->
             updateReady cfg msg readyModel
 
@@ -628,7 +637,8 @@ updateInitializing cfg msg model =
                     |> Tea.withCmd meshLoadingCmd
 
             MeshesLoadFailed err ->
-                Debug.todo (Debug.toString err)
+                InitializingFailed (Debug.toString err)
+                    |> Tea.save
 
             MeshesLoaded laserTowerMesh hexTileMesh enemySphereMesh wallAllMesh thingToProtect ->
                 let
@@ -1133,7 +1143,20 @@ view cfg model =
     List.map (Tea.mapView cfg) <|
         case model of
             Initializing _ ->
-                [ Html.text "Initializing..." ]
+                [ Html.div [ Css.initializing ]
+                    [ Html.text "Initializing..."
+                    , Html.div
+                        [ Css.loading ]
+                        []
+                    ]
+                ]
+
+            InitializingFailed err ->
+                [ Html.div [ Css.initializing ]
+                    [ Html.text "Initializing failed: "
+                    , Html.text err
+                    ]
+                ]
 
             Ready readyModel ->
                 viewReady readyModel

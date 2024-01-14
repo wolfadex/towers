@@ -74,3 +74,94 @@ label {
     display: flex;
     gap: 0.5rem;
 }
+
+.initializing {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    justify-content: center;
+    align-items: center;
+
+    font-size: 2rem;
+}
+
+.loading {
+    height: 5rem;
+    width: 5rem;
+    border-radius: 50%;
+    border-width: 0.5rem;
+    border-style: solid;
+    animation: loading-anim 5s infinite linear;
+    animation-direction: reverse;
+}
+
+@keyframes loading-anim {
+    0% {
+        transform: rotate(0deg);
+        border-top-color: var(--color-yellow);
+        border-right-color: rgba(0, 0, 0, 0);
+        border-bottom-color: rgba(0, 0, 0, 0);
+        border-left-color: rgba(0, 0, 0, 0);
+    }
+
+    12.5% {
+        border-top-color: rgba(0, 0, 0, 0);
+        border-right-color: rgba(0, 0, 0, 0);
+        border-bottom-color: rgba(0, 0, 0, 0);
+        border-left-color: var(--color-yellow);
+    }
+
+    25% {
+        transform: rotate(90deg);
+        border-top-color: rgba(0, 0, 0, 0);
+        border-right-color: rgba(0, 0, 0, 0);
+        border-bottom-color: var(--color-yellow);
+        border-left-color: rgba(0, 0, 0, 0);
+    }
+
+    37.5% {
+        border-top-color: rgba(0, 0, 0, 0);
+        border-right-color: var(--color-yellow);
+        border-bottom-color: rgba(0, 0, 0, 0);
+        border-left-color: rgba(0, 0, 0, 0);
+    }
+
+    50% {
+        transform: rotate(180deg);
+        border-top-color: var(--color-yellow);
+        border-right-color: rgba(0, 0, 0, 0);
+        border-bottom-color: rgba(0, 0, 0, 0);
+        border-left-color: rgba(0, 0, 0, 0);
+    }
+
+    62.5% {
+        border-top-color: rgba(0, 0, 0, 0);
+        border-right-color: rgba(0, 0, 0, 0);
+        border-bottom-color: rgba(0, 0, 0, 0);
+        border-left-color: var(--color-yellow);
+    }
+
+    75% {
+        transform: rotate(270deg);
+        border-top-color: rgba(0, 0, 0, 0);
+        border-right-color: rgba(0, 0, 0, 0);
+        border-bottom-color: var(--color-yellow);
+        border-left-color: rgba(0, 0, 0, 0);
+    }
+
+    87.5% {
+        border-top-color: rgba(0, 0, 0, 0);
+        border-right-color: var(--color-yellow);
+        border-bottom-color: rgba(0, 0, 0, 0);
+        border-left-color: rgba(0, 0, 0, 0);
+    }
+
+    100% {
+        transform: rotate(360deg);
+        border-top-color: var(--color-yellow);
+        border-right-color: rgba(0, 0, 0, 0);
+        border-bottom-color: rgba(0, 0, 0, 0);
+        border-left-color: rgba(0, 0, 0, 0);
+    }
+}
