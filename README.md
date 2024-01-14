@@ -4,7 +4,7 @@ Having fun building a tower defense game.
 
 ## Play
 
-
+Play at https://hex-tower.netlify.app/
 
 
 ## Development
