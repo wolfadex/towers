@@ -6,7 +6,8 @@
     "dev": "run-pty run-pty.json",
     "dev:elm": "elm-watch hot",
     "dev:css": "css-in-elm watch public/styles.css src/Css.elm",
-    "dev:review": "elm-review --watch --fix"
+    "dev:review": "elm-review --watch --fix",
+    "build": "css-in-elm make public/styles.css src/Css.elm && elm-watch make"
   },
   "author": "Wolfgang Schuster",
   "devDependencies": {
