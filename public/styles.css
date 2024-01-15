@@ -191,3 +191,14 @@ label {
     justify-content: space-between;
     padding: 1rem;
 }
+
+dialog[open] {
+    border-color: var(--color-yellow);
+    background-color: var(--color-brown);
+    font-size: 1.25rem;
+    max-width: 40rem;
+}
+
+dialog::backdrop {
+    background-color: rgba(0, 0, 0, 0.5);
+}

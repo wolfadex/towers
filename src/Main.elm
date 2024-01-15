@@ -2,6 +2,7 @@ module Main exposing (Flags, Model, Msg, main)
 
 import Browser
 import Game
+import LevelEditor
 import Menu
 import Tea
 
@@ -29,6 +30,7 @@ type alias Flags =
 type Model
     = Menu Menu.Model
     | Game Game.Model
+    | LevelEditor LevelEditor.Model
 
 
 
@@ -58,6 +60,9 @@ subscriptions model =
         Game gameModel ->
             Game.subscriptions { toMsg = GameMsg } gameModel
 
+        LevelEditor levelEditorModel ->
+            LevelEditor.subscriptions { toMsg = LevelEditorMsg } levelEditorModel
+
 
 
 ------------
@@ -68,8 +73,10 @@ subscriptions model =
 type Msg
     = MenuMsg Menu.Msg
     | GameMsg Game.Msg
+    | LevelEditorMsg LevelEditor.Msg
       --
     | GameStart
+    | EditLevel
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -83,6 +90,7 @@ update msg model =
                             { toModel = Menu
                             , toMsg = MenuMsg
                             , onGameStart = GameStart
+                            , onLevelEdit = EditLevel
                             }
                             menuMsg
                             menuModel
@@ -100,9 +108,22 @@ update msg model =
                     _ ->
                         Tea.save model
 
+            LevelEditorMsg levelEditorMsg ->
+                case model of
+                    LevelEditor levelEditorModel ->
+                        LevelEditor.update { toModel = LevelEditor, toMsg = LevelEditorMsg }
+                            levelEditorMsg
+                            levelEditorModel
+
+                    _ ->
+                        Tea.save model
+
             --
             GameStart ->
                 Game.init { toModel = Game, toMsg = GameMsg }
+
+            EditLevel ->
+                LevelEditor.init { toModel = LevelEditor, toMsg = LevelEditorMsg }
 
 
 
@@ -121,4 +142,7 @@ view model =
 
             Game gameModel ->
                 Game.view { toMsg = GameMsg } gameModel
+
+            LevelEditor levelEditorModel ->
+                LevelEditor.view { toMsg = LevelEditorMsg } levelEditorModel
     }

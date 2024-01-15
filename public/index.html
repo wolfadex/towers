@@ -21,8 +21,24 @@
             }
             // END - Extend basic JS objects
 
-            Elm.Main.init({
+            const app = Elm.Main.init({
                 flags: Date.now(),
+            });
+
+            app.ports.openModal.subscribe((modalId) => {
+                const modal = document.getElementById(modalId);
+
+                if (modal) {
+                    modal.showModal();
+                }
+            });
+
+            app.ports.closeModal.subscribe((modalId) => {
+                const modal = document.getElementById(modalId);
+
+                if (modal) {
+                    modal.close();
+                }
             });
         </script>
     </body>
