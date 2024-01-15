@@ -86,6 +86,11 @@ label {
     font-size: 2rem;
 }
 
+.errorReport {
+    padding: 0 2rem;
+    text-align: center;
+}
+
 .loading {
     height: 5rem;
     width: 5rem;

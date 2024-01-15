@@ -1503,8 +1503,18 @@ view cfg model =
 
             InitializingFailed err ->
                 [ Html.div [ Css.initializing ]
-                    [ Html.text "Initializing failed: "
-                    , Html.text err
+                    [ Html.text "Initializing failed 😞"
+                    , Html.br [] []
+                    , Html.p [ Css.errorReport ]
+                        [ Html.text err ]
+                    , Html.br [] []
+                    , Html.p [ Css.errorReport ]
+                        [ Html.text "If you have a moment, I'd apprecate if you could report this error at "
+                        , Html.a
+                            [ Html.Attributes.href "https://github.com/wolfadex/towers/issues" ]
+                            [ Html.text "https://github.com/wolfadex/towers/issues" ]
+                        , Html.text "."
+                        ]
                     ]
                 ]
 
