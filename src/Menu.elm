@@ -1,4 +1,11 @@
-module Menu exposing (Model, Msg(..), init, subscriptions, update, view)
+module Menu exposing
+    ( Model
+    , Msg(..)
+    , init
+    , subscriptions
+    , update
+    , view
+    )
 
 import Css
 import Html exposing (Html)
@@ -83,11 +90,14 @@ view cfg _ =
         , Html.div [ Css.mainMenu ]
             [ Html.div [ Css.menu ]
                 [ Html.button
-                    [ Html.Attributes.disabled True ]
-                    [ Html.text "Load Game" ]
-                , Html.button
                     [ Html.Events.onClick StartGame ]
-                    [ Html.text "Start Game" ]
+                    [ Html.text "New Game" ]
+                , Html.button
+                    [ Html.Attributes.disabled True ]
+                    [ Html.text "Load Custom Game" ]
+                , Html.button
+                    [ Html.Attributes.disabled True ]
+                    [ Html.text "Level Editor" ]
                 , Html.button
                     [ Html.Attributes.disabled True ]
                     [ Html.text "About" ]

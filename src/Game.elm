@@ -92,7 +92,8 @@ type alias InitializingModel =
 type alias ReadyModel =
     { tilemap : Hex.Map ( Scene3d.Entity WorldCoordinates, Maybe Ecs.Entity )
     , highlightedTile : Maybe Hex
-    , cameraPosition : Point2d Pixels ScreenCoordinates
+    , cameraEyePoint : Point3d Length.Meters WorldCoordinates
+    , cameraRotation : { current : Angle, destination : Angle }
     , seed : Random.Seed
     , lastTimestamp : Time.Posix
     , currency : Int
@@ -646,8 +647,39 @@ subscriptions cfg model =
             Sub.none
 
         Ready _ ->
-            Browser.Events.onAnimationFrame Tick
+            [ Browser.Events.onAnimationFrame Tick
+            , Browser.Events.onKeyPress decodeKeyPressed
+            ]
+                |> Sub.batch
                 |> Tea.mapSub cfg
+
+
+decodeKeyPressed : Json.Decode.Decoder Msg
+decodeKeyPressed =
+    Json.Decode.map5
+        (\key alt control shift meta ->
+            KeyPressed
+                { key = key
+                , alt = alt
+                , control = control
+                , shift = shift
+                , meta = meta
+                }
+        )
+        (Json.Decode.field "key" Json.Decode.string)
+        (Json.Decode.field "altKey" Json.Decode.bool)
+        (Json.Decode.field "ctrlKey" Json.Decode.bool)
+        (Json.Decode.field "shiftKey" Json.Decode.bool)
+        (Json.Decode.field "metaKey" Json.Decode.bool)
+
+
+type alias Key =
+    { key : String
+    , alt : Bool
+    , control : Bool
+    , shift : Bool
+    , meta : Bool
+    }
 
 
 
@@ -658,13 +690,20 @@ subscriptions cfg model =
 
 type Msg
     = Tick Time.Posix
+    | KeyPressed Key
     | Clicked (Point2d Pixels ScreenCoordinates)
     | MouseMoved (Point2d Pixels ScreenCoordinates)
+    | RotateCamera HandedDirection
     | TrapTypeSelected TrapType
     | MeshesLoading (Task.Parallel.Msg6 RawMesh RawMesh RawMesh EnemySphereRawMesh WallRawMesh ThingToProtectRawMesh)
     | MeshesLoadFailed Http.Error
     | MeshesLoaded RawMesh RawMesh RawMesh EnemySphereRawMesh WallRawMesh ThingToProtectRawMesh
     | TimeInitialized Meshes Time.Posix
+
+
+type HandedDirection
+    = Left
+    | Right
 
 
 type alias RawMesh =
@@ -846,7 +885,8 @@ initReady cfg =
     in
     { tilemap = tilemap
     , highlightedTile = Nothing
-    , cameraPosition = Point2d.origin
+    , cameraEyePoint = Point3d.meters 25 0 35
+    , cameraRotation = { current = Angle.degrees 0, destination = Angle.degrees 0 }
     , seed =
         cfg.currentTime
             |> Time.posixToMillis
@@ -906,6 +946,7 @@ updateReady cfg msg model =
                     { model
                         | lastTimestamp = currentTimestamp
                     }
+                        |> moveCamera deltaTime
                         |> applyWave deltaTime
                         |> attackAnimationUpdate deltaTime
                         |> animationUpdate deltaTime
@@ -920,12 +961,29 @@ updateReady cfg msg model =
                     }
                         |> Tea.save
 
+                RotateCamera handedDirection ->
+                    rotateCamera handedDirection model
+                        |> Tea.save
+
+                KeyPressed { key, alt, control, meta } ->
+                    if (key == "a" || key == "A") && not alt && not control && not meta then
+                        rotateCamera Left model
+                            |> Tea.save
+
+                    else if (key == "d" || key == "D") && not alt && not control && not meta then
+                        rotateCamera Right model
+                            |> Tea.save
+
+                    else
+                        model
+                            |> Tea.save
+
                 MouseMoved screenPoint ->
                     let
                         maybeClickedPoint : Maybe (Point3d Length.Meters WorldCoordinates)
                         maybeClickedPoint =
                             Camera3d.ray
-                                defaultCamera
+                                (defaultCamera model.cameraRotation.current model.cameraEyePoint)
                                 screenRectangle
                                 screenPoint
                                 |> Axis3d.intersectionWithPlane Plane3d.xy
@@ -962,7 +1020,7 @@ updateReady cfg msg model =
                         maybeClickedPoint : Maybe (Point3d Length.Meters WorldCoordinates)
                         maybeClickedPoint =
                             Camera3d.ray
-                                defaultCamera
+                                (defaultCamera model.cameraRotation.current model.cameraEyePoint)
                                 screenRectangle
                                 screenPoint
                                 |> Axis3d.intersectionWithPlane Plane3d.xy
@@ -1005,6 +1063,32 @@ updateReady cfg msg model =
                 _ ->
                     model
                         |> Tea.save
+
+
+rotateCamera : HandedDirection -> ReadyModel -> ReadyModel
+rotateCamera handedDirection model =
+    let
+        cameraRotation : { current : Angle, destination : Angle }
+        cameraRotation =
+            model.cameraRotation
+
+        handedSign : Float
+        handedSign =
+            case handedDirection of
+                Left ->
+                    -1
+
+                Right ->
+                    1
+    in
+    { model
+        | cameraRotation =
+            { cameraRotation
+                | destination =
+                    cameraRotation.destination
+                        |> Quantity.plus (Angle.degrees (60 * handedSign))
+            }
+    }
 
 
 screenRectangle : Rectangle2d Pixels ScreenCoordinates
@@ -1198,6 +1282,58 @@ createTrap createFn cost hex model =
 
     else
         model
+
+
+moveCamera : Duration -> ReadyModel -> ReadyModel
+moveCamera deltaTime model =
+    if Quantity.equalWithin (Angle.degrees 0.1) model.cameraRotation.current model.cameraRotation.destination then
+        model
+
+    else
+        let
+            desiredRotationAmount : Angle
+            desiredRotationAmount =
+                model.cameraRotation.destination
+                    |> Quantity.minus model.cameraRotation.current
+
+            desiredRotationSign : Float
+            desiredRotationSign =
+                desiredRotationAmount
+                    |> Quantity.sign
+
+            rotationSpeed : AngularSpeed
+            rotationSpeed =
+                desiredRotationSign
+                    |> (*) 45
+                    |> AngularSpeed.degreesPerSecond
+
+            maxRotationAmount : Angle
+            maxRotationAmount =
+                deltaTime
+                    |> Quantity.at rotationSpeed
+
+            cameraRotation : { current : Angle, destination : Angle }
+            cameraRotation =
+                model.cameraRotation
+        in
+        { model
+            | cameraRotation =
+                { cameraRotation
+                    | current =
+                        cameraRotation.current
+                            |> Quantity.plus
+                                (if desiredRotationSign < 0 then
+                                    Quantity.max
+                                        maxRotationAmount
+                                        desiredRotationAmount
+
+                                 else
+                                    Quantity.min
+                                        maxRotationAmount
+                                        desiredRotationAmount
+                                )
+                }
+        }
 
 
 applyWave : Duration -> ReadyModel -> ReadyModel
@@ -1604,7 +1740,7 @@ viewReady model =
                         (Angle.degrees -5)
             , shadows = True
             , dimensions = ( Pixels.int 800, Pixels.int 600 )
-            , camera = defaultCamera
+            , camera = defaultCamera model.cameraRotation.current model.cameraEyePoint
             , clipDepth = Length.meters 0.1
             , background = Scene3d.backgroundColor Color.black
             , entities =
@@ -1617,17 +1753,35 @@ viewReady model =
                     , viewThingsToProtect3d model
                     ]
             }
+        , Html.div []
+            [ Html.div
+                [ Css.cameraControlsLabel ]
+                [ Html.text "Camera Controls" ]
+            , Html.div
+                [ Css.cameraControls ]
+                [ Html.button
+                    [ Html.Events.onClick (RotateCamera Left) ]
+                    [ Html.text "Rotate Left" ]
+                , Html.button
+                    [ Html.Events.onClick (RotateCamera Right) ]
+                    [ Html.text "Rotate Right" ]
+                ]
+            ]
         ]
     ]
 
 
-defaultCamera : Camera3d Length.Meters WorldCoordinates
-defaultCamera =
+defaultCamera : Angle -> Point3d Length.Meters WorldCoordinates -> Camera3d Length.Meters WorldCoordinates
+defaultCamera rotation eyePoint =
     let
         cameraViewpoint : Viewpoint3d Length.Meters WorldCoordinates
         cameraViewpoint =
             Viewpoint3d.lookAt
-                { eyePoint = Point3d.meters 25 0 35
+                { eyePoint =
+                    eyePoint
+                        |> Point3d.rotateAround
+                            Axis3d.z
+                            rotation
                 , focalPoint = Point3d.origin
                 , upDirection = Direction3d.positiveZ
                 }

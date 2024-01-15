@@ -179,3 +179,15 @@ label {
 .selectedTrap {
     background-color: var(--color-blue);
 }
+
+.cameraControlsLabel {
+    font-size: 1rem;
+    padding-left: 1rem;
+    padding-top: 1rem;
+}
+
+.cameraControls {
+    display: flex;
+    justify-content: space-between;
+    padding: 1rem;
+}
