@@ -65,8 +65,10 @@ import Task.Parallel
 import Tea exposing (Tea)
 import Time
 import TriangularMesh exposing (TriangularMesh)
+import Util.Dict
 import Util.Ecs.Component
 import Util.Maybe
+import Util.Obj.Decode
 import Vector3d exposing (Vector3d)
 import Viewpoint3d exposing (Viewpoint3d)
 
@@ -84,7 +86,7 @@ type Model
 
 
 type alias InitializingModel =
-    Task.Parallel.State5 Msg GameMesh GameMesh GameMesh GameMesh ThingToProtectGameMesh
+    Task.Parallel.State5 Msg GameMesh GameMesh GameMesh WallGameMesh ThingToProtectGameMesh
 
 
 type alias ReadyModel =
@@ -117,29 +119,47 @@ type alias ReadyModel =
     , delayComponent : Ecs.Component Delay
     , attackStyleComponent : Ecs.Component AttackStyle
     , attackAnimationComponent : Ecs.Component AttackAnimation
+    , wallComponent : Ecs.Component Wall
     }
 
 
 type alias Meshes =
-    { laserTower : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
-    , hexTile : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
-    , enemySphere : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
-    , wallAll : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
+    { laserTower : MeshAndShadow
+    , hexTile : MeshAndShadow
+    , enemySphere : MeshAndShadow
+    , wall : WallMeshAndShadow
     , thingToProtect : ThingToProtectMeshAndShadow
     }
 
 
+type alias MeshAndShadow =
+    ( Scene3d.Mesh.Textured WorldCoordinates
+    , Scene3d.Mesh.Shadow WorldCoordinates
+    )
+
+
+type alias WallMeshAndShadow =
+    { core : MeshAndShadow
+    , northEast : MeshAndShadow
+    , east : MeshAndShadow
+    , southEast : MeshAndShadow
+    , southWest : MeshAndShadow
+    , west : MeshAndShadow
+    , northWest : MeshAndShadow
+    }
+
+
 type alias ThingToProtectMeshAndShadow =
-    { core : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
-    , ringInner : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
-    , ringMiddle : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
-    , ringOuter : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
+    { core : MeshAndShadow
+    , ringInner : MeshAndShadow
+    , ringMiddle : MeshAndShadow
+    , ringOuter : MeshAndShadow
     }
 
 
 type TrapType
     = AttackTower
-    | Wall
+    | BlockingWall
 
 
 type ScreenCoordinates
@@ -244,6 +264,17 @@ trapSpec =
     }
 
 
+type Wall
+    = Wall
+
+
+wallSpec : Ecs.Component.Spec Wall ReadyModel
+wallSpec =
+    { get = .wallComponent
+    , set = \wallComponent world -> { world | wallComponent = wallComponent }
+    }
+
+
 type alias Delay =
     { between : Duration
     , remaining : Duration
@@ -340,30 +371,38 @@ decodeStringResolver stringDecoder response =
 
 
 loadMeshes :
-    ( Task.Parallel.State5 Msg GameMesh GameMesh GameMesh GameMesh ThingToProtectGameMesh
+    ( Task.Parallel.State5 Msg GameMesh GameMesh GameMesh WallGameMesh ThingToProtectGameMesh
     , Cmd Msg
     )
 loadMeshes =
+    let
+        namedTexturedFacesIn : String -> Obj.Decode.Decoder GameMesh
+        namedTexturedFacesIn name =
+            meshFilterNameEquals name
+                (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
+    in
     Task.Parallel.attempt5
         { task1 = getMesh "laser_tower" (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
         , task2 = getMesh "ground_hex" (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
         , task3 = getMesh "enemy_sphere" (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
-        , task4 = getMesh "wall_all" (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
+        , task4 =
+            getMesh "wall"
+                (Obj.Decode.succeed WallGameMesh
+                    |> Util.Obj.Decode.andMap (namedTexturedFacesIn "Core")
+                    |> Util.Obj.Decode.andMap (namedTexturedFacesIn "Section_NE")
+                    |> Util.Obj.Decode.andMap (namedTexturedFacesIn "Section_E")
+                    |> Util.Obj.Decode.andMap (namedTexturedFacesIn "Section_SE")
+                    |> Util.Obj.Decode.andMap (namedTexturedFacesIn "Section_SW")
+                    |> Util.Obj.Decode.andMap (namedTexturedFacesIn "Section_W")
+                    |> Util.Obj.Decode.andMap (namedTexturedFacesIn "Section_NW")
+                )
         , task5 =
             getMesh "thing_to_protect"
                 (Obj.Decode.map4 ThingToProtectGameMesh
-                    (meshFilterNameEquals "Core"
-                        (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
-                    )
-                    (meshFilterNameEquals "Rings_Inner"
-                        (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
-                    )
-                    (meshFilterNameEquals "Rings_Middle"
-                        (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
-                    )
-                    (meshFilterNameEquals "Rings_Outer"
-                        (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
-                    )
+                    (namedTexturedFacesIn "Core")
+                    (namedTexturedFacesIn "Rings_Inner")
+                    (namedTexturedFacesIn "Rings_Middle")
+                    (namedTexturedFacesIn "Rings_Outer")
                 )
         , onUpdates = MeshesLoading
         , onFailure = MeshesLoadFailed
@@ -558,7 +597,7 @@ createWall : Hex -> ReadyModel -> ( Ecs.Entity, ReadyModel )
 createWall position model =
     let
         ( mesh, shadow ) =
-            model.meshes.wallAll
+            model.meshes.wall.core
 
         translateBy : Vector3d Length.Meters WorldCoordinates
         translateBy =
@@ -569,6 +608,7 @@ createWall position model =
     in
     model
         |> Ecs.Entity.create ecsConfigSpec
+        |> Ecs.Entity.with ( wallSpec, Wall )
         |> Ecs.Entity.with
             ( staticMeshSpec
             , Scene3d.meshWithShadow
@@ -615,9 +655,9 @@ type Msg
     = Tick Time.Posix
     | Clicked (Point2d Pixels ScreenCoordinates)
     | TrapTypeSelected TrapType
-    | MeshesLoading (Task.Parallel.Msg5 GameMesh GameMesh GameMesh GameMesh ThingToProtectGameMesh)
+    | MeshesLoading (Task.Parallel.Msg5 GameMesh GameMesh GameMesh WallGameMesh ThingToProtectGameMesh)
     | MeshesLoadFailed Http.Error
-    | MeshesLoaded GameMesh GameMesh GameMesh GameMesh ThingToProtectGameMesh
+    | MeshesLoaded GameMesh GameMesh GameMesh WallGameMesh ThingToProtectGameMesh
     | TimeInitialized Meshes Time.Posix
 
 
@@ -634,6 +674,17 @@ type alias ThingToProtectGameMesh =
     , ringInner : GameMesh
     , ringMiddle : GameMesh
     , ringOuter : GameMesh
+    }
+
+
+type alias WallGameMesh =
+    { core : GameMesh
+    , northEast : GameMesh
+    , east : GameMesh
+    , southEast : GameMesh
+    , southWest : GameMesh
+    , west : GameMesh
+    , northWest : GameMesh
     }
 
 
@@ -690,7 +741,7 @@ updateInitializing cfg msg model =
                     |> InitializingFailed
                     |> Tea.save
 
-            MeshesLoaded laserTowerMesh hexTileMesh enemySphereMesh wallAllMesh thingToProtect ->
+            MeshesLoaded laserTowerMesh hexTileMesh enemySphereMesh wallMesh thingToProtect ->
                 let
                     initMesh : GameMesh -> ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
                     initMesh m =
@@ -713,7 +764,15 @@ updateInitializing cfg msg model =
                                     { laserTower = initMesh laserTowerMesh
                                     , hexTile = initMesh hexTileMesh
                                     , enemySphere = initMesh enemySphereMesh
-                                    , wallAll = initMesh wallAllMesh
+                                    , wall =
+                                        { core = initMesh wallMesh.core
+                                        , northEast = initMesh wallMesh.northEast
+                                        , east = initMesh wallMesh.east
+                                        , southEast = initMesh wallMesh.southEast
+                                        , southWest = initMesh wallMesh.southWest
+                                        , west = initMesh wallMesh.west
+                                        , northWest = initMesh wallMesh.northWest
+                                        }
                                     , thingToProtect =
                                         { core = initMesh thingToProtect.core
                                         , ringInner = initMesh thingToProtect.ringInner
@@ -808,6 +867,7 @@ initReady cfg =
     , delayComponent = Ecs.Component.empty
     , attackStyleComponent = Ecs.Component.empty
     , attackAnimationComponent = Ecs.Component.empty
+    , wallComponent = Ecs.Component.empty
     }
         |> createPlayer
         |> Ready
@@ -889,17 +949,115 @@ updateReady cfg msg model =
                                 Just ( _, Nothing ) ->
                                     case model.trapType of
                                         AttackTower ->
-                                            createTrap createAttackTower 100 clickedHex model
+                                            model
+                                                |> createTrap createAttackTower 100 clickedHex
+                                                |> updateWallSections
+                                                |> Tea.save
 
-                                        Wall ->
-                                            createTrap createWall 50 clickedHex model
+                                        BlockingWall ->
+                                            model
+                                                |> createTrap createWall 50 clickedHex
+                                                |> updateWallSections
+                                                |> Tea.save
 
                 _ ->
                     model
                         |> Tea.save
 
 
-createTrap : (Hex -> ReadyModel -> ( Ecs.Entity, ReadyModel )) -> Int -> Hex -> ReadyModel -> Tea ReadyModel Msg
+updateWallSections : ReadyModel -> ReadyModel
+updateWallSections model =
+    let
+        ( meshCore, shadowCore ) =
+            model.meshes.wall.core
+
+        -- The various directions are a bit flipped around because of the way they're
+        -- exported from Blender and I was lazy and preferred swapping here rather
+        -- than trying to figure out how to get themt to line up properly when exporting.
+        ( meshSectionNE, shadowSectionNE ) =
+            model.meshes.wall.southEast
+
+        ( meshSectionE, shadowSectionE ) =
+            model.meshes.wall.east
+
+        ( meshSectionSE, shadowSectionSE ) =
+            model.meshes.wall.northEast
+
+        ( meshSectionSW, shadowSectionSW ) =
+            model.meshes.wall.northWest
+
+        ( meshSectionW, shadowSectionW ) =
+            model.meshes.wall.west
+
+        ( meshSectionNW, shadowSectionNW ) =
+            model.meshes.wall.southWest
+
+        translateBy : Hex -> Vector3d Length.Meters WorldCoordinates
+        translateBy position =
+            position
+                |> Hex.toPoint2d hexMapLayout
+                |> Point3d.on SketchPlane3d.xy
+                |> Vector3d.from Point3d.origin
+
+        toMaybeSection : Hex -> Hex.Direction -> Scene3d.Mesh.Textured WorldCoordinates -> Scene3d.Mesh.Shadow WorldCoordinates -> ReadyModel -> Maybe (Scene3d.Entity WorldCoordinates)
+        toMaybeSection position direction mesh shadow mdl =
+            position
+                |> Hex.neighbor direction
+                |> Hex.toKey
+                |> Util.Dict.at mdl.tilemap
+                |> Maybe.andThen Tuple.second
+                |> Maybe.andThen (Util.Ecs.Component.at mdl.trapComponent)
+                |> Maybe.map
+                    (\_ ->
+                        Scene3d.meshWithShadow
+                            (Scene3d.Material.metal
+                                { baseColor = Color.darkBlue
+                                , roughness = 0.5
+                                }
+                            )
+                            mesh
+                            shadow
+                            |> Scene3d.translateBy (translateBy position)
+                    )
+    in
+    Ecs.System.indexedFoldl3
+        (\wallEntity position _ _ nextModel ->
+            let
+                updatedEntity3d : Scene3d.Entity WorldCoordinates
+                updatedEntity3d =
+                    [ toMaybeSection position Hex.NorthEast meshSectionNE shadowSectionNE nextModel
+                    , toMaybeSection position Hex.East meshSectionE shadowSectionE nextModel
+                    , toMaybeSection position Hex.SouthEast meshSectionSE shadowSectionSE nextModel
+                    , toMaybeSection position Hex.SouthWest meshSectionSW shadowSectionSW nextModel
+                    , toMaybeSection position Hex.West meshSectionW shadowSectionW nextModel
+                    , toMaybeSection position Hex.NorthWest meshSectionNW shadowSectionNW nextModel
+                    , Scene3d.meshWithShadow
+                        (Scene3d.Material.metal
+                            { baseColor = Color.darkBlue
+                            , roughness = 0.5
+                            }
+                        )
+                        meshCore
+                        shadowCore
+                        |> Scene3d.translateBy (translateBy position)
+                        |> Just
+                    ]
+                        |> List.filterMap identity
+                        |> Scene3d.group
+            in
+            Util.Ecs.Component.set
+                staticMeshSpec
+                wallEntity
+                updatedEntity3d
+                nextModel
+        )
+        model.positionComponent
+        model.staticMeshComponent
+        model.wallComponent
+        model
+
+
+createTrap : (Hex -> ReadyModel -> ( Ecs.Entity, ReadyModel )) -> Int -> Hex -> ReadyModel -> ReadyModel
 createTrap createFn cost hex model =
     if model.currency >= cost then
         let
@@ -910,11 +1068,9 @@ createTrap createFn cost hex model =
         case Dict.get key model.tilemap of
             Nothing ->
                 model
-                    |> Tea.save
 
             Just ( _, Just _ ) ->
                 model
-                    |> Tea.save
 
             Just ( entity3d, Nothing ) ->
                 { model
@@ -930,11 +1086,9 @@ createTrap createFn cost hex model =
                                         model.tilemap
                             }
                        )
-                    |> Tea.save
 
     else
         model
-            |> Tea.save
 
 
 applyWave : Duration -> ReadyModel -> ReadyModel
@@ -1303,9 +1457,9 @@ viewReady model =
                 ]
                 [ Html.text "Laser (¥100)" ]
             , Html.button
-                [ Html.Events.onClick (TrapTypeSelected Wall)
+                [ Html.Events.onClick (TrapTypeSelected BlockingWall)
                 , case model.trapType of
-                    Wall ->
+                    BlockingWall ->
                         Css.selectedTrap
 
                     _ ->

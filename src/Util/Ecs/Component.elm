@@ -1,4 +1,8 @@
-module Util.Ecs.Component exposing (set, update)
+module Util.Ecs.Component exposing
+    ( at
+    , set
+    , update
+    )
 
 import Ecs
 import Ecs.Component
@@ -22,3 +26,8 @@ set spec entity comp world =
             |> Ecs.Component.set entity comp
         )
         world
+
+
+at : Ecs.Component comp -> Ecs.Entity -> Maybe comp
+at comp entity =
+    Ecs.Component.get entity comp
