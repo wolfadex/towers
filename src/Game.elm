@@ -86,7 +86,7 @@ type Model
 
 
 type alias InitializingModel =
-    Task.Parallel.State5 Msg GameMesh GameMesh GameMesh WallGameMesh ThingToProtectGameMesh
+    Task.Parallel.State5 Msg RawMesh RawMesh EnemySphereRawMesh WallRawMesh ThingToProtectRawMesh
 
 
 type alias ReadyModel =
@@ -125,7 +125,7 @@ type alias ReadyModel =
 type alias Meshes =
     { laserTower : MeshAndShadow
     , hexTile : MeshAndShadow
-    , enemySphere : MeshAndShadow
+    , enemySphere : EnemySphereMeshAndShadow
     , wall : WallMeshAndShadow
     , thingToProtect : ThingToProtectMeshAndShadow
     }
@@ -153,6 +153,12 @@ type alias ThingToProtectMeshAndShadow =
     , ringInner : MeshAndShadow
     , ringMiddle : MeshAndShadow
     , ringOuter : MeshAndShadow
+    }
+
+
+type alias EnemySphereMeshAndShadow =
+    { core : MeshAndShadow
+    , disc : MeshAndShadow
     }
 
 
@@ -363,12 +369,12 @@ decodeStringResolver stringDecoder response =
 
 
 loadMeshes :
-    ( Task.Parallel.State5 Msg GameMesh GameMesh GameMesh WallGameMesh ThingToProtectGameMesh
+    ( Task.Parallel.State5 Msg RawMesh RawMesh EnemySphereRawMesh WallRawMesh ThingToProtectRawMesh
     , Cmd Msg
     )
 loadMeshes =
     let
-        namedTexturedFacesIn : String -> Obj.Decode.Decoder GameMesh
+        namedTexturedFacesIn : String -> Obj.Decode.Decoder RawMesh
         namedTexturedFacesIn name =
             meshFilterNameEquals name
                 (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
@@ -376,10 +382,16 @@ loadMeshes =
     Task.Parallel.attempt5
         { task1 = getMesh "laser_tower" (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
         , task2 = getMesh "ground_hex" (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
-        , task3 = getMesh "enemy_sphere" (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
+        , task3 =
+            getMesh "enemy_sphere"
+                -- (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
+                (Obj.Decode.map2 EnemySphereRawMesh
+                    (namedTexturedFacesIn "Core")
+                    (namedTexturedFacesIn "Disc")
+                )
         , task4 =
             getMesh "wall"
-                (Obj.Decode.succeed WallGameMesh
+                (Obj.Decode.succeed WallRawMesh
                     |> Util.Obj.Decode.andMap (namedTexturedFacesIn "Core")
                     |> Util.Obj.Decode.andMap (namedTexturedFacesIn "Section_NE")
                     |> Util.Obj.Decode.andMap (namedTexturedFacesIn "Section_E")
@@ -390,7 +402,7 @@ loadMeshes =
                 )
         , task5 =
             getMesh "thing_to_protect"
-                (Obj.Decode.map4 ThingToProtectGameMesh
+                (Obj.Decode.map4 ThingToProtectRawMesh
                     (namedTexturedFacesIn "Core")
                     (namedTexturedFacesIn "Rings_Inner")
                     (namedTexturedFacesIn "Rings_Middle")
@@ -645,13 +657,13 @@ type Msg
     = Tick Time.Posix
     | Clicked (Point2d Pixels ScreenCoordinates)
     | TrapTypeSelected TrapType
-    | MeshesLoading (Task.Parallel.Msg5 GameMesh GameMesh GameMesh WallGameMesh ThingToProtectGameMesh)
+    | MeshesLoading (Task.Parallel.Msg5 RawMesh RawMesh EnemySphereRawMesh WallRawMesh ThingToProtectRawMesh)
     | MeshesLoadFailed Http.Error
-    | MeshesLoaded GameMesh GameMesh GameMesh WallGameMesh ThingToProtectGameMesh
+    | MeshesLoaded RawMesh RawMesh EnemySphereRawMesh WallRawMesh ThingToProtectRawMesh
     | TimeInitialized Meshes Time.Posix
 
 
-type alias GameMesh =
+type alias RawMesh =
     TriangularMesh
         { normal : Vector3d Quantity.Unitless WorldCoordinates
         , position : Point3d Length.Meters WorldCoordinates
@@ -659,22 +671,28 @@ type alias GameMesh =
         }
 
 
-type alias ThingToProtectGameMesh =
-    { core : GameMesh
-    , ringInner : GameMesh
-    , ringMiddle : GameMesh
-    , ringOuter : GameMesh
+type alias ThingToProtectRawMesh =
+    { core : RawMesh
+    , ringInner : RawMesh
+    , ringMiddle : RawMesh
+    , ringOuter : RawMesh
     }
 
 
-type alias WallGameMesh =
-    { core : GameMesh
-    , northEast : GameMesh
-    , east : GameMesh
-    , southEast : GameMesh
-    , southWest : GameMesh
-    , west : GameMesh
-    , northWest : GameMesh
+type alias WallRawMesh =
+    { core : RawMesh
+    , northEast : RawMesh
+    , east : RawMesh
+    , southEast : RawMesh
+    , southWest : RawMesh
+    , west : RawMesh
+    , northWest : RawMesh
+    }
+
+
+type alias EnemySphereRawMesh =
+    { core : RawMesh
+    , disc : RawMesh
     }
 
 
@@ -733,7 +751,7 @@ updateInitializing cfg msg model =
 
             MeshesLoaded laserTowerMesh hexTileMesh enemySphereMesh wallMesh thingToProtect ->
                 let
-                    initMesh : GameMesh -> ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
+                    initMesh : RawMesh -> ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
                     initMesh m =
                         let
                             mesh : Scene3d.Mesh.Textured WorldCoordinates
@@ -753,7 +771,10 @@ updateInitializing cfg msg model =
                                 (TimeInitialized
                                     { laserTower = initMesh laserTowerMesh
                                     , hexTile = initMesh hexTileMesh
-                                    , enemySphere = initMesh enemySphereMesh
+                                    , enemySphere =
+                                        { core = initMesh enemySphereMesh.core
+                                        , disc = initMesh enemySphereMesh.disc
+                                        }
                                     , wall =
                                         { core = initMesh wallMesh.core
                                         , northEast = initMesh wallMesh.northEast
@@ -1618,28 +1639,51 @@ viewAttacks3d model =
 viewEnemies3d : ReadyModel -> List (Scene3d.Entity WorldCoordinates)
 viewEnemies3d model =
     let
-        ( mesh, shadow ) =
-            model.meshes.enemySphere
+        ( meshCore, shadowCore ) =
+            model.meshes.enemySphere.core
+
+        ( meshDisc, shadowDisc ) =
+            model.meshes.enemySphere.disc
     in
     Ecs.System.foldl2
-        (\{ point } _ acc ->
-            (let
+        (\{ point, distance } _ acc ->
+            let
                 translateBy : Vector3d Length.Meters WorldCoordinates
                 translateBy =
+                    originPosition
+                        |> Point3d.translateIn Direction3d.positiveZ (Length.meters 1.5)
+                        |> Vector3d.from Point3d.origin
+
+                originPosition : Point3d Length.Meters WorldCoordinates
+                originPosition =
                     point
                         |> Point3d.on SketchPlane3d.xy
-                        |> Vector3d.from Point3d.origin
-             in
-             Scene3d.meshWithShadow
+            in
+            (Scene3d.meshWithShadow
                 (Scene3d.Material.metal
-                    { baseColor = Color.red
+                    { baseColor = Color.lightRed
                     , roughness = 0.5
                     }
                 )
-                mesh
-                shadow
+                meshCore
+                shadowCore
                 |> Scene3d.translateBy translateBy
             )
+                :: (Scene3d.meshWithShadow
+                        (Scene3d.Material.metal
+                            { baseColor = Color.darkRed
+                            , roughness = 0.5
+                            }
+                        )
+                        meshDisc
+                        shadowDisc
+                        |> Scene3d.translateBy translateBy
+                        |> Scene3d.rotateAround
+                            (Axis3d.through originPosition
+                                Direction3d.positiveZ
+                            )
+                            (Angle.turns distance)
+                   )
                 :: acc
         )
         model.pathComponent
