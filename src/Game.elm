@@ -46,6 +46,7 @@ import Json.Decode
 import Length
 import LineSegment3d
 import List.Extra
+import Meshes exposing (Meshes)
 import Obj.Decode
 import Pixels exposing (Pixels)
 import Plane3d
@@ -61,7 +62,6 @@ import Scene3d.Mesh
 import Set
 import SketchPlane3d
 import Task exposing (Task)
-import Task.Parallel
 import Tea exposing (Tea)
 import Time
 import TriangularMesh exposing (TriangularMesh)
@@ -86,7 +86,7 @@ type Model
 
 
 type alias InitializingModel =
-    Task.Parallel.State6 Msg RawMesh RawMesh RawMesh EnemySphereRawMesh WallRawMesh ThingToProtectRawMesh
+    Meshes.Model WorldCoordinates Msg
 
 
 type alias ReadyModel =
@@ -100,7 +100,7 @@ type alias ReadyModel =
     , waves : Maybe Wave
     , tillNextWave : Maybe { initial : Duration, remaining : Duration }
     , trapType : TrapType
-    , meshes : Meshes
+    , meshes : Meshes.Meshes WorldCoordinates
 
     -- ECS
     , ecsConfig : Ecs.Config
@@ -121,47 +121,6 @@ type alias ReadyModel =
     , attackStyleComponent : Ecs.Component AttackStyle
     , attackAnimationComponent : Ecs.Component AttackAnimation
     , wallComponent : Ecs.Component Wall
-    }
-
-
-type alias Meshes =
-    { laserTower : MeshAndShadow
-    , hexTile : MeshAndShadow
-    , hexTileHighlight : MeshAndShadow
-    , enemySphere : EnemySphereMeshAndShadow
-    , wall : WallMeshAndShadow
-    , thingToProtect : ThingToProtectMeshAndShadow
-    }
-
-
-type alias MeshAndShadow =
-    ( Scene3d.Mesh.Textured WorldCoordinates
-    , Scene3d.Mesh.Shadow WorldCoordinates
-    )
-
-
-type alias WallMeshAndShadow =
-    { core : MeshAndShadow
-    , northEast : MeshAndShadow
-    , east : MeshAndShadow
-    , southEast : MeshAndShadow
-    , southWest : MeshAndShadow
-    , west : MeshAndShadow
-    , northWest : MeshAndShadow
-    }
-
-
-type alias ThingToProtectMeshAndShadow =
-    { core : MeshAndShadow
-    , ringInner : MeshAndShadow
-    , ringMiddle : MeshAndShadow
-    , ringOuter : MeshAndShadow
-    }
-
-
-type alias EnemySphereMeshAndShadow =
-    { core : MeshAndShadow
-    , disc : MeshAndShadow
     }
 
 
@@ -324,111 +283,14 @@ attackAnimationSpec =
 
 init : { toMsg : Msg -> msg, toModel : Model -> model } -> Tea model msg
 init cfg =
-    loadMeshes
-        |> Tea.fromTuple
-        |> Tea.mapModel Initializing
-        |> Tea.map cfg
-
-
-getMesh : String -> Obj.Decode.Decoder a -> Task Http.Error a
-getMesh fileName decoder =
-    Http.task
-        { method = "GET"
-        , url = "mesh/" ++ fileName ++ ".obj"
-        , resolver =
-            Obj.Decode.decodeString
-                Length.meters
-                decoder
-                |> decodeStringResolver
-                |> Http.stringResolver
-        , body = Http.emptyBody
-        , headers = []
-        , timeout = Nothing
-        }
-
-
-decodeStringResolver : (String -> Result String a) -> Http.Response String -> Result Http.Error a
-decodeStringResolver stringDecoder response =
-    case response of
-        Http.BadUrl_ url ->
-            Err (Http.BadUrl url)
-
-        Http.Timeout_ ->
-            Err Http.Timeout
-
-        Http.NetworkError_ ->
-            Err Http.NetworkError
-
-        Http.BadStatus_ metadata _ ->
-            Err (Http.BadStatus metadata.statusCode)
-
-        Http.GoodStatus_ _ body ->
-            case stringDecoder body of
-                Err err ->
-                    Err (Http.BadBody err)
-
-                Ok good ->
-                    Ok good
-
-
-loadMeshes :
-    ( Task.Parallel.State6 Msg RawMesh RawMesh RawMesh EnemySphereRawMesh WallRawMesh ThingToProtectRawMesh
-    , Cmd Msg
-    )
-loadMeshes =
-    let
-        namedTexturedFacesIn : String -> Obj.Decode.Decoder RawMesh
-        namedTexturedFacesIn name =
-            meshFilterNameEquals name
-                (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
-    in
-    Task.Parallel.attempt6
-        { task1 = getMesh "laser_tower" (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
-        , task2 = getMesh "ground_hex" (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
-        , task3 = getMesh "ground_hex_highlight" (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
-        , task4 =
-            getMesh "enemy_sphere"
-                -- (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
-                (Obj.Decode.map2 EnemySphereRawMesh
-                    (namedTexturedFacesIn "Core")
-                    (namedTexturedFacesIn "Disc")
-                )
-        , task5 =
-            getMesh "wall"
-                (Obj.Decode.succeed WallRawMesh
-                    |> Util.Obj.Decode.andMap (namedTexturedFacesIn "Core")
-                    |> Util.Obj.Decode.andMap (namedTexturedFacesIn "Section_NE")
-                    |> Util.Obj.Decode.andMap (namedTexturedFacesIn "Section_E")
-                    |> Util.Obj.Decode.andMap (namedTexturedFacesIn "Section_SE")
-                    |> Util.Obj.Decode.andMap (namedTexturedFacesIn "Section_SW")
-                    |> Util.Obj.Decode.andMap (namedTexturedFacesIn "Section_W")
-                    |> Util.Obj.Decode.andMap (namedTexturedFacesIn "Section_NW")
-                )
-        , task6 =
-            getMesh "thing_to_protect"
-                (Obj.Decode.map4 ThingToProtectRawMesh
-                    (namedTexturedFacesIn "Core")
-                    (namedTexturedFacesIn "Rings_Inner")
-                    (namedTexturedFacesIn "Rings_Middle")
-                    (namedTexturedFacesIn "Rings_Outer")
-                )
-        , onUpdates = MeshesLoading
+    Meshes.init
+        { onUpdates = MeshesLoading
         , onFailure = MeshesLoadFailed
         , onSuccess = MeshesLoaded
         }
-
-
-meshFilterNameEquals : String -> Obj.Decode.Decoder a -> Obj.Decode.Decoder a
-meshFilterNameEquals name =
-    Obj.Decode.filter
-        (\{ object } ->
-            case object of
-                Just objectName ->
-                    objectName == name
-
-                Nothing ->
-                    False
-        )
+        |> Tea.fromTuple
+        |> Tea.mapModel Initializing
+        |> Tea.map cfg
 
 
 type Wave
@@ -695,48 +557,15 @@ type Msg
     | MouseMoved (Point2d Pixels ScreenCoordinates)
     | RotateCamera HandedDirection
     | TrapTypeSelected TrapType
-    | MeshesLoading (Task.Parallel.Msg6 RawMesh RawMesh RawMesh EnemySphereRawMesh WallRawMesh ThingToProtectRawMesh)
+    | MeshesLoading (Meshes.LoadingMsg WorldCoordinates)
     | MeshesLoadFailed Http.Error
-    | MeshesLoaded RawMesh RawMesh RawMesh EnemySphereRawMesh WallRawMesh ThingToProtectRawMesh
-    | TimeInitialized Meshes Time.Posix
+    | MeshesLoaded (Meshes.RawMesh WorldCoordinates) (Meshes.RawMesh WorldCoordinates) (Meshes.RawMesh WorldCoordinates) (Meshes.EnemySphereRawMesh WorldCoordinates) (Meshes.WallRawMesh WorldCoordinates) (Meshes.ThingToProtectRawMesh WorldCoordinates)
+    | TimeInitialized (Meshes WorldCoordinates) Time.Posix
 
 
 type HandedDirection
     = Left
     | Right
-
-
-type alias RawMesh =
-    TriangularMesh
-        { normal : Vector3d Quantity.Unitless WorldCoordinates
-        , position : Point3d Length.Meters WorldCoordinates
-        , uv : ( Float, Float )
-        }
-
-
-type alias ThingToProtectRawMesh =
-    { core : RawMesh
-    , ringInner : RawMesh
-    , ringMiddle : RawMesh
-    , ringOuter : RawMesh
-    }
-
-
-type alias WallRawMesh =
-    { core : RawMesh
-    , northEast : RawMesh
-    , east : RawMesh
-    , southEast : RawMesh
-    , southWest : RawMesh
-    , west : RawMesh
-    , northWest : RawMesh
-    }
-
-
-type alias EnemySphereRawMesh =
-    { core : RawMesh
-    , disc : RawMesh
-    }
 
 
 update : { toMsg : Msg -> msg, toModel : Model -> model } -> Msg -> Model -> Tea model msg
@@ -761,7 +590,7 @@ updateInitializing cfg msg model =
             MeshesLoading msg_ ->
                 let
                     ( nextMeshLoadingModel, meshLoadingCmd ) =
-                        Task.Parallel.update6 model msg_
+                        Meshes.update msg_ model
                 in
                 nextMeshLoadingModel
                     |> Initializing
@@ -793,48 +622,20 @@ updateInitializing cfg msg model =
                     |> Tea.save
 
             MeshesLoaded laserTowerMesh hexTileMesh hexTileHighlightMesh enemySphereMesh wallMesh thingToProtect ->
-                let
-                    initMesh : RawMesh -> ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
-                    initMesh m =
-                        let
-                            mesh : Scene3d.Mesh.Textured WorldCoordinates
-                            mesh =
-                                Scene3d.Mesh.texturedFaces m
-                        in
-                        ( mesh
-                        , Scene3d.Mesh.shadow mesh
-                        )
-                in
                 model
                     |> Initializing
                     |> Tea.save
                     |> Tea.withCmd
                         (Time.now
                             |> Task.perform
-                                (TimeInitialized
-                                    { laserTower = initMesh laserTowerMesh
-                                    , hexTile = initMesh hexTileMesh
-                                    , hexTileHighlight = initMesh hexTileHighlightMesh
-                                    , enemySphere =
-                                        { core = initMesh enemySphereMesh.core
-                                        , disc = initMesh enemySphereMesh.disc
-                                        }
-                                    , wall =
-                                        { core = initMesh wallMesh.core
-                                        , northEast = initMesh wallMesh.northEast
-                                        , east = initMesh wallMesh.east
-                                        , southEast = initMesh wallMesh.southEast
-                                        , southWest = initMesh wallMesh.southWest
-                                        , west = initMesh wallMesh.west
-                                        , northWest = initMesh wallMesh.northWest
-                                        }
-                                    , thingToProtect =
-                                        { core = initMesh thingToProtect.core
-                                        , ringInner = initMesh thingToProtect.ringInner
-                                        , ringMiddle = initMesh thingToProtect.ringMiddle
-                                        , ringOuter = initMesh thingToProtect.ringOuter
-                                        }
-                                    }
+                                (Meshes.fromRaw
+                                    laserTowerMesh
+                                    hexTileMesh
+                                    hexTileHighlightMesh
+                                    enemySphereMesh
+                                    wallMesh
+                                    thingToProtect
+                                    |> TimeInitialized
                                 )
                         )
 
@@ -850,7 +651,7 @@ updateInitializing cfg msg model =
                     |> Tea.save
 
 
-initReady : { currentTime : Time.Posix, meshes : Meshes } -> Tea Model Msg
+initReady : { currentTime : Time.Posix, meshes : Meshes WorldCoordinates } -> Tea Model Msg
 initReady cfg =
     let
         ( mesh, shadow ) =
@@ -1753,19 +1554,19 @@ viewReady model =
                     , viewThingsToProtect3d model
                     ]
             }
-        , Html.div []
-            [ Html.div
-                [ Css.cameraControlsLabel ]
-                [ Html.text "Camera Controls" ]
-            , Html.div
-                [ Css.cameraControls ]
-                [ Html.button
-                    [ Html.Events.onClick (RotateCamera Left) ]
-                    [ Html.text "Rotate Left" ]
-                , Html.button
-                    [ Html.Events.onClick (RotateCamera Right) ]
-                    [ Html.text "Rotate Right" ]
-                ]
+        ]
+    , Html.div []
+        [ Html.div
+            [ Css.cameraControlsLabel ]
+            [ Html.text "Camera Controls" ]
+        , Html.div
+            [ Css.cameraControls ]
+            [ Html.button
+                [ Html.Events.onClick (RotateCamera Left) ]
+                [ Html.text "Rotate Left" ]
+            , Html.button
+                [ Html.Events.onClick (RotateCamera Right) ]
+                [ Html.text "Rotate Right" ]
             ]
         ]
     ]
@@ -2030,7 +1831,7 @@ viewHexGridMap3d hexMap =
         |> List.map Tuple.first
 
 
-viewHighlightedTile3d : Maybe Hex -> MeshAndShadow -> List (Scene3d.Entity WorldCoordinates)
+viewHighlightedTile3d : Maybe Hex -> Meshes.MeshAndShadow WorldCoordinates -> List (Scene3d.Entity WorldCoordinates)
 viewHighlightedTile3d maybeHighlitedHex ( mesh, _ ) =
     case maybeHighlitedHex of
         Nothing ->
