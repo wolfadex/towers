@@ -102,7 +102,6 @@ type alias ReadyModel =
 
     -- ECS
     , ecsConfig : Ecs.Config
-    , colorComponent : Ecs.Component String
     , staticMeshComponent : Ecs.Component (Scene3d.Entity WorldCoordinates)
     , thingToProtectAnimationComponent : Ecs.Component Angle
     , positionComponent : Ecs.Component Hex
@@ -174,13 +173,6 @@ ecsConfigSpec : Ecs.Config.Spec ReadyModel
 ecsConfigSpec =
     { get = .ecsConfig
     , set = \config world -> { world | ecsConfig = config }
-    }
-
-
-colorSpec : Ecs.Component.Spec String ReadyModel
-colorSpec =
-    { get = .colorComponent
-    , set = \colorComponent world -> { world | colorComponent = colorComponent }
     }
 
 
@@ -487,7 +479,6 @@ createEnemy model =
         Just hex ->
             { model | seed = nextSeed }
                 |> Ecs.Entity.create ecsConfigSpec
-                |> Ecs.Entity.with ( colorSpec, "red" )
                 |> Ecs.Entity.with ( healthSpec, { current = 10, max = 10 } )
                 |> Ecs.Entity.with ( positionSpec, hex )
                 |> Ecs.Entity.with ( enemySpec, Enemy )
@@ -547,7 +538,6 @@ findPath cfg =
 removeEnemy : Ecs.Entity -> ReadyModel -> ReadyModel
 removeEnemy entity model =
     ( entity, { model | currency = model.currency + 10 } )
-        |> Ecs.Entity.remove colorSpec
         |> Ecs.Entity.remove healthSpec
         |> Ecs.Entity.remove positionSpec
         |> Ecs.Entity.remove enemySpec
@@ -855,7 +845,6 @@ initReady cfg =
 
     -- ECS
     , ecsConfig = Ecs.Config.init
-    , colorComponent = Ecs.Component.empty
     , staticMeshComponent = Ecs.Component.empty
     , thingToProtectAnimationComponent = Ecs.Component.empty
     , positionComponent = Ecs.Component.empty
@@ -951,13 +940,11 @@ updateReady cfg msg model =
                                         AttackTower ->
                                             model
                                                 |> createTrap createAttackTower 100 clickedHex
-                                                |> updateWallSections
                                                 |> Tea.save
 
                                         BlockingWall ->
                                             model
                                                 |> createTrap createWall 50 clickedHex
-                                                |> updateWallSections
                                                 |> Tea.save
 
                 _ ->
@@ -1057,6 +1044,61 @@ updateWallSections model =
         model
 
 
+updatePaths : Hex -> ReadyModel -> ReadyModel
+updatePaths hexNowWithEntity model =
+    Ecs.System.indexedFoldl2
+        (\pathingEntity position { path, distance } nextModel ->
+            if List.any (Hex.similar hexNowWithEntity) path then
+                case path of
+                    firstHex :: secondHex :: _ ->
+                        if Hex.similar secondHex hexNowWithEntity && distance > 0 then
+                            nextModel
+
+                        else
+                            let
+                                newPath : List Hex
+                                newPath =
+                                    firstHex
+                                        :: secondHex
+                                        :: findPath
+                                            { from = secondHex
+                                            , to = Hex.origin
+                                            , tilemap = nextModel.tilemap
+                                            }
+                            in
+                            Util.Ecs.Component.set
+                                pathSpec
+                                pathingEntity
+                                { path = newPath
+                                , distance = distance
+                                , point =
+                                    case newPath of
+                                        [] ->
+                                            position
+                                                |> Hex.toPoint2d hexMapLayout
+
+                                        [ oneHex ] ->
+                                            Hex.toPoint2d hexMapLayout oneHex
+
+                                        newFirstHex :: newSecondHex :: _ ->
+                                            Point2d.interpolateFrom
+                                                (Hex.toPoint2d hexMapLayout newFirstHex)
+                                                (Hex.toPoint2d hexMapLayout newSecondHex)
+                                                distance
+                                }
+                                nextModel
+
+                    _ ->
+                        nextModel
+
+            else
+                nextModel
+        )
+        model.positionComponent
+        model.pathComponent
+        model
+
+
 createTrap : (Hex -> ReadyModel -> ( Ecs.Entity, ReadyModel )) -> Int -> Hex -> ReadyModel -> ReadyModel
 createTrap createFn cost hex model =
     if model.currency >= cost then
@@ -1086,6 +1128,8 @@ createTrap createFn cost hex model =
                                         model.tilemap
                             }
                        )
+                    |> updateWallSections
+                    |> updatePaths hex
 
     else
         model
@@ -1193,7 +1237,7 @@ attackAnimationUpdate deltaTime =
 moveEnemy : Duration -> ReadyModel -> ReadyModel
 moveEnemy deltaTime =
     Ecs.System.map2
-        (\( position, setPosition ) ( { path, distance }, setPath ) ->
+        (\( _, setPosition ) ( { path, distance }, setPath ) ->
             let
                 deltaSeconds : Float
                 deltaSeconds =
@@ -1214,8 +1258,7 @@ moveEnemy deltaTime =
             in
             case remainingPath of
                 [] ->
-                    position
-                        |> setPosition
+                    identity
 
                 [ finalPos ] ->
                     finalPos
@@ -1578,8 +1621,8 @@ viewEnemies3d model =
         ( mesh, shadow ) =
             model.meshes.enemySphere
     in
-    Ecs.System.foldl3
-        (\{ point } _ _ acc ->
+    Ecs.System.foldl2
+        (\{ point } _ acc ->
             (let
                 translateBy : Vector3d Length.Meters WorldCoordinates
                 translateBy =
@@ -1600,7 +1643,6 @@ viewEnemies3d model =
                 :: acc
         )
         model.pathComponent
-        model.colorComponent
         model.enemyComponent
         []
 
