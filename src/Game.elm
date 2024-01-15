@@ -1867,7 +1867,7 @@ viewHexGridMap3d hexMap =
 
 
 viewHighlightedTile3d : Maybe Hex -> MeshAndShadow -> List (Scene3d.Entity WorldCoordinates)
-viewHighlightedTile3d maybeHighlitedHex ( mesh, shadow ) =
+viewHighlightedTile3d maybeHighlitedHex ( mesh, _ ) =
     case maybeHighlitedHex of
         Nothing ->
             []
@@ -1881,14 +1881,13 @@ viewHighlightedTile3d maybeHighlitedHex ( mesh, shadow ) =
                         |> Point3d.on SketchPlane3d.xy
                         |> Vector3d.from Point3d.origin
             in
-            [ Scene3d.meshWithShadow
+            [ Scene3d.mesh
                 (Scene3d.Material.metal
                     { baseColor = Color.lightRed
                     , roughness = 0.7
                     }
                 )
                 mesh
-                shadow
                 |> Scene3d.translateBy translateBy
             ]
 
