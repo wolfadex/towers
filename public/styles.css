@@ -165,3 +165,12 @@ label {
         border-left-color: rgba(0, 0, 0, 0);
     }
 }
+
+.trapSelection {
+    display: flex;
+    gap: 1rem;
+}
+
+.selectedTrap {
+    background-color: var(--color-blue);
+}

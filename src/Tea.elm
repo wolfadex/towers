@@ -60,7 +60,7 @@ toTuple (Tea tea) =
     ( tea.model
     , tea.callbacks
         |> List.map (Task.succeed >> Task.perform identity)
-        |> (++) tea.commands
+        |> List.append tea.commands
         |> Cmd.batch
     )
 

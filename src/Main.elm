@@ -113,7 +113,7 @@ update msg model =
 
 view : Model -> Browser.Document Msg
 view model =
-    { title = "Tower Defense"
+    { title = "Hex Defense"
     , body =
         case model of
             Menu menuModel ->

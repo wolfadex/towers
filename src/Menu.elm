@@ -37,7 +37,7 @@ init cfg =
 
 
 subscriptions : { toMsg : Msg -> msg } -> Model -> Sub msg
-subscriptions cfg _ =
+subscriptions _ _ =
     Sub.none
 
 
@@ -75,7 +75,7 @@ update cfg msg model =
 
 
 view : { toMsg : Msg -> msg } -> Model -> List (Html msg)
-view cfg model =
+view cfg _ =
     List.map (Tea.mapView cfg)
         [ Html.div
             [ Css.title ]

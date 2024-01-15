@@ -19,7 +19,8 @@ module Game exposing
     )
 
 import AStar.Generalised
-import Angle
+import Angle exposing (Angle)
+import AngularSpeed exposing (AngularSpeed)
 import Axis3d
 import Basics.Extra
 import Browser.Events
@@ -53,7 +54,7 @@ import Point3d exposing (Point3d)
 import Quantity
 import Random
 import Random.List
-import Rectangle2d
+import Rectangle2d exposing (Rectangle2d)
 import Scene3d
 import Scene3d.Material
 import Scene3d.Mesh
@@ -67,7 +68,7 @@ import TriangularMesh exposing (TriangularMesh)
 import Util.Ecs.Component
 import Util.Maybe
 import Vector3d exposing (Vector3d)
-import Viewpoint3d
+import Viewpoint3d exposing (Viewpoint3d)
 
 
 
@@ -83,7 +84,7 @@ type Model
 
 
 type alias InitializingModel =
-    Task.Parallel.State5 Msg GameMesh GameMesh GameMesh GameMesh GameMesh
+    Task.Parallel.State5 Msg GameMesh GameMesh GameMesh GameMesh ThingToProtectGameMesh
 
 
 type alias ReadyModel =
@@ -101,6 +102,7 @@ type alias ReadyModel =
     , ecsConfig : Ecs.Config
     , colorComponent : Ecs.Component String
     , staticMeshComponent : Ecs.Component (Scene3d.Entity WorldCoordinates)
+    , thingToProtectAnimationComponent : Ecs.Component Angle
     , positionComponent : Ecs.Component Hex
     , healthComponent : Ecs.Component Health
     , pathComponent :
@@ -123,7 +125,15 @@ type alias Meshes =
     , hexTile : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
     , enemySphere : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
     , wallAll : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
-    , thingToProtect : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
+    , thingToProtect : ThingToProtectMeshAndShadow
+    }
+
+
+type alias ThingToProtectMeshAndShadow =
+    { core : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
+    , ringInner : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
+    , ringMiddle : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
+    , ringOuter : ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
     }
 
 
@@ -158,6 +168,13 @@ staticMeshSpec : Ecs.Component.Spec (Scene3d.Entity WorldCoordinates) ReadyModel
 staticMeshSpec =
     { get = .staticMeshComponent
     , set = \staticMeshComponent world -> { world | staticMeshComponent = staticMeshComponent }
+    }
+
+
+thingToProtectAnimationSpec : Ecs.Component.Spec Angle ReadyModel
+thingToProtectAnimationSpec =
+    { get = .thingToProtectAnimationComponent
+    , set = \thingToProtectAnimationComponent world -> { world | thingToProtectAnimationComponent = thingToProtectAnimationComponent }
     }
 
 
@@ -281,15 +298,15 @@ init cfg =
         |> Tea.map cfg
 
 
-getMesh : String -> Task Http.Error GameMesh
-getMesh fileName =
+getMesh : String -> Obj.Decode.Decoder a -> Task Http.Error a
+getMesh fileName decoder =
     Http.task
         { method = "GET"
         , url = "mesh/" ++ fileName ++ ".obj"
         , resolver =
             Obj.Decode.decodeString
                 Length.meters
-                (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
+                decoder
                 |> decodeStringResolver
                 |> Http.stringResolver
         , body = Http.emptyBody
@@ -323,20 +340,48 @@ decodeStringResolver stringDecoder response =
 
 
 loadMeshes :
-    ( Task.Parallel.State5 Msg GameMesh GameMesh GameMesh GameMesh GameMesh
+    ( Task.Parallel.State5 Msg GameMesh GameMesh GameMesh GameMesh ThingToProtectGameMesh
     , Cmd Msg
     )
 loadMeshes =
     Task.Parallel.attempt5
-        { task1 = getMesh "laser_tower"
-        , task2 = getMesh "ground_hex"
-        , task3 = getMesh "enemy_sphere"
-        , task4 = getMesh "wall_all"
-        , task5 = getMesh "thing_to_protect"
+        { task1 = getMesh "laser_tower" (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
+        , task2 = getMesh "ground_hex" (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
+        , task3 = getMesh "enemy_sphere" (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
+        , task4 = getMesh "wall_all" (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
+        , task5 =
+            getMesh "thing_to_protect"
+                (Obj.Decode.map4 ThingToProtectGameMesh
+                    (meshFilterNameEquals "Core"
+                        (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
+                    )
+                    (meshFilterNameEquals "Rings_Inner"
+                        (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
+                    )
+                    (meshFilterNameEquals "Rings_Middle"
+                        (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
+                    )
+                    (meshFilterNameEquals "Rings_Outer"
+                        (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
+                    )
+                )
         , onUpdates = MeshesLoading
         , onFailure = MeshesLoadFailed
         , onSuccess = MeshesLoaded
         }
+
+
+meshFilterNameEquals : String -> Obj.Decode.Decoder a -> Obj.Decode.Decoder a
+meshFilterNameEquals name =
+    Obj.Decode.filter
+        (\{ object } ->
+            case object of
+                Just objectName ->
+                    objectName == name
+
+                Nothing ->
+                    False
+        )
 
 
 type Wave
@@ -346,32 +391,9 @@ type Wave
 
 createPlayer : ReadyModel -> ReadyModel
 createPlayer model =
-    let
-        ( mesh, shadow ) =
-            model.meshes.thingToProtect
-
-        translateBy : Vector3d Length.Meters WorldCoordinates
-        translateBy =
-            Hex.origin
-                |> Hex.toPoint2d hexMapLayout
-                |> Point3d.on SketchPlane3d.xy
-                |> Point3d.translateIn Direction3d.positiveZ (Length.meters 2)
-                |> Vector3d.from Point3d.origin
-    in
     model
         |> Ecs.Entity.create ecsConfigSpec
-        |> Ecs.Entity.with
-            ( staticMeshSpec
-            , Scene3d.meshWithShadow
-                (Scene3d.Material.metal
-                    { baseColor = Color.lightOrange
-                    , roughness = 0.5
-                    }
-                )
-                mesh
-                shadow
-                |> Scene3d.translateBy translateBy
-            )
+        |> Ecs.Entity.with ( thingToProtectAnimationSpec, Angle.turns 0 )
         |> Ecs.Entity.with ( healthSpec, { current = 100, max = 100 } )
         |> Ecs.Entity.with ( playerSpec, Player )
         |> Ecs.Entity.with ( positionSpec, Hex.origin )
@@ -593,9 +615,9 @@ type Msg
     = Tick Time.Posix
     | Clicked (Point2d Pixels ScreenCoordinates)
     | TrapTypeSelected TrapType
-    | MeshesLoading (Task.Parallel.Msg5 GameMesh GameMesh GameMesh GameMesh GameMesh)
+    | MeshesLoading (Task.Parallel.Msg5 GameMesh GameMesh GameMesh GameMesh ThingToProtectGameMesh)
     | MeshesLoadFailed Http.Error
-    | MeshesLoaded GameMesh GameMesh GameMesh GameMesh GameMesh
+    | MeshesLoaded GameMesh GameMesh GameMesh GameMesh ThingToProtectGameMesh
     | TimeInitialized Meshes Time.Posix
 
 
@@ -605,6 +627,14 @@ type alias GameMesh =
         , position : Point3d Length.Meters WorldCoordinates
         , uv : ( Float, Float )
         }
+
+
+type alias ThingToProtectGameMesh =
+    { core : GameMesh
+    , ringInner : GameMesh
+    , ringMiddle : GameMesh
+    , ringOuter : GameMesh
+    }
 
 
 update : { toMsg : Msg -> msg, toModel : Model -> model } -> Msg -> Model -> Tea model msg
@@ -636,14 +666,36 @@ updateInitializing cfg msg model =
                     |> Tea.save
                     |> Tea.withCmd meshLoadingCmd
 
-            MeshesLoadFailed err ->
-                InitializingFailed (Debug.toString err)
+            MeshesLoadFailed error ->
+                let
+                    errorAsString : String
+                    errorAsString =
+                        case error of
+                            Http.BadUrl url ->
+                                "Invalid URL: " ++ url
+
+                            Http.Timeout ->
+                                "HTTP Timeout"
+
+                            Http.NetworkError ->
+                                "Network error"
+
+                            Http.BadStatus status ->
+                                "Bad HTTP status: " ++ String.fromInt status
+
+                            Http.BadBody body ->
+                                "Invalid mesh data: " ++ body
+                in
+                errorAsString
+                    |> InitializingFailed
                     |> Tea.save
 
             MeshesLoaded laserTowerMesh hexTileMesh enemySphereMesh wallAllMesh thingToProtect ->
                 let
+                    initMesh : GameMesh -> ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
                     initMesh m =
                         let
+                            mesh : Scene3d.Mesh.Textured WorldCoordinates
                             mesh =
                                 Scene3d.Mesh.texturedFaces m
                         in
@@ -662,7 +714,12 @@ updateInitializing cfg msg model =
                                     , hexTile = initMesh hexTileMesh
                                     , enemySphere = initMesh enemySphereMesh
                                     , wallAll = initMesh wallAllMesh
-                                    , thingToProtect = initMesh thingToProtect
+                                    , thingToProtect =
+                                        { core = initMesh thingToProtect.core
+                                        , ringInner = initMesh thingToProtect.ringInner
+                                        , ringMiddle = initMesh thingToProtect.ringMiddle
+                                        , ringOuter = initMesh thingToProtect.ringOuter
+                                        }
                                     }
                                 )
                         )
@@ -674,7 +731,9 @@ updateInitializing cfg msg model =
                     }
 
             _ ->
-                Debug.todo "Unexpected message"
+                model
+                    |> Initializing
+                    |> Tea.save
 
 
 initReady : { currentTime : Time.Posix, meshes : Meshes } -> Tea Model Msg
@@ -706,7 +765,7 @@ initReady cfg =
         tilemap : Hex.Map ( Scene3d.Entity WorldCoordinates, Maybe Ecs.Entity )
         tilemap =
             Hex.origin
-                |> Hex.circle 5
+                |> Hex.circle 6
                 |> List.map (\hex -> ( Hex.toKey hex, ( to3dEntity hex, Nothing ) ))
                 |> Dict.fromList
     in
@@ -719,7 +778,10 @@ initReady cfg =
     , lastTimestamp = cfg.currentTime
     , currency = 500
     , waves =
-        FinalWave 7
+        FinalWave 21
+            |> NextWave 13 (Duration.seconds 10)
+            |> NextWave 11 (Duration.seconds 10)
+            |> NextWave 7 (Duration.seconds 10)
             |> NextWave 5 (Duration.seconds 10)
             |> NextWave 3 (Duration.seconds 10)
             |> NextWave 2 (Duration.seconds 10)
@@ -736,6 +798,7 @@ initReady cfg =
     , ecsConfig = Ecs.Config.init
     , colorComponent = Ecs.Component.empty
     , staticMeshComponent = Ecs.Component.empty
+    , thingToProtectAnimationComponent = Ecs.Component.empty
     , positionComponent = Ecs.Component.empty
     , healthComponent = Ecs.Component.empty
     , pathComponent = Ecs.Component.empty
@@ -769,6 +832,7 @@ updateReady cfg msg model =
                     }
                         |> applyWave deltaTime
                         |> attackAnimationUpdate deltaTime
+                        |> animationUpdate deltaTime
                         |> towerAttack deltaTime
                         |> moveEnemy deltaTime
                         |> enemyAttack
@@ -782,6 +846,7 @@ updateReady cfg msg model =
 
                 Clicked screenPoint ->
                     let
+                        screenRectangle : Rectangle2d Pixels ScreenCoordinates
                         screenRectangle =
                             Rectangle2d.with
                                 { x1 = Pixels.pixels 0
@@ -790,6 +855,7 @@ updateReady cfg msg model =
                                 , y2 = Pixels.pixels 0
                                 }
 
+                        maybeClickedPoint : Maybe (Point3d Length.Meters WorldCoordinates)
                         maybeClickedPoint =
                             Camera3d.ray
                                 defaultCamera
@@ -804,6 +870,7 @@ updateReady cfg msg model =
 
                         Just clickedPoint ->
                             let
+                                clickedHex : Hex
                                 clickedHex =
                                     clickedPoint
                                         |> Point3d.projectInto SketchPlane3d.xy
@@ -828,7 +895,8 @@ updateReady cfg msg model =
                                             createTrap createWall 50 clickedHex model
 
                 _ ->
-                    Debug.todo "Unexpected message"
+                    model
+                        |> Tea.save
 
 
 createTrap : (Hex -> ReadyModel -> ( Ecs.Entity, ReadyModel )) -> Int -> Hex -> ReadyModel -> Tea ReadyModel Msg
@@ -923,6 +991,26 @@ applyWave deltaTime model =
 
                     NextWave enemyCount tillNext rest ->
                         createEnemies enemyCount (Just tillNext) (Just rest)
+
+
+animationUpdate : Duration -> ReadyModel -> ReadyModel
+animationUpdate deltaTime =
+    Ecs.System.map
+        (\turns ->
+            let
+                angularSpeed : AngularSpeed
+                angularSpeed =
+                    AngularSpeed.turnsPerSecond 0.25
+
+                turnsToAdd : Angle
+                turnsToAdd =
+                    deltaTime
+                        |> Quantity.at angularSpeed
+            in
+            turns
+                |> Quantity.plus turnsToAdd
+        )
+        thingToProtectAnimationSpec
 
 
 attackAnimationUpdate : Duration -> ReadyModel -> ReadyModel
@@ -1203,15 +1291,27 @@ viewReady model =
             [ Html.text "Money: "
             , Html.text ("¥" ++ String.fromInt model.currency)
             ]
-        , Html.div []
+        , Html.div [ Css.trapSelection ]
             [ Html.button
                 [ Html.Events.onClick (TrapTypeSelected AttackTower)
+                , case model.trapType of
+                    AttackTower ->
+                        Css.selectedTrap
+
+                    _ ->
+                        Html.Attributes.class ""
                 ]
-                [ Html.text "Tower" ]
+                [ Html.text "Laser (¥100)" ]
             , Html.button
                 [ Html.Events.onClick (TrapTypeSelected Wall)
+                , case model.trapType of
+                    Wall ->
+                        Css.selectedTrap
+
+                    _ ->
+                        Html.Attributes.class ""
                 ]
-                [ Html.text "Wall" ]
+                [ Html.text "Wall  (¥50)" ]
             ]
         ]
     , Html.div
@@ -1221,7 +1321,14 @@ viewReady model =
         ]
         [ Scene3d.sunny
             { upDirection = Direction3d.positiveZ
-            , sunlightDirection = Direction3d.negativeZ
+            , sunlightDirection =
+                Direction3d.negativeZ
+                    |> Direction3d.rotateAround
+                        Axis3d.x
+                        (Angle.degrees 15)
+                    |> Direction3d.rotateAround
+                        Axis3d.y
+                        (Angle.degrees -5)
             , shadows = True
             , dimensions = ( Pixels.int 800, Pixels.int 600 )
             , camera = defaultCamera
@@ -1233,6 +1340,7 @@ viewReady model =
                     , viewEnemies3d model
                     , viewStaticMeshes model
                     , viewAttacks3d model
+                    , viewThingsToProtect3d model
                     ]
             }
         ]
@@ -1242,6 +1350,7 @@ viewReady model =
 defaultCamera : Camera3d Length.Meters WorldCoordinates
 defaultCamera =
     let
+        cameraViewpoint : Viewpoint3d Length.Meters WorldCoordinates
         cameraViewpoint =
             Viewpoint3d.lookAt
                 { eyePoint = Point3d.meters 25 0 35
@@ -1339,6 +1448,110 @@ viewEnemies3d model =
         model.pathComponent
         model.colorComponent
         model.enemyComponent
+        []
+
+
+viewThingsToProtect3d : ReadyModel -> List (Scene3d.Entity WorldCoordinates)
+viewThingsToProtect3d model =
+    let
+        ( meshCore, shadowCore ) =
+            model.meshes.thingToProtect.core
+
+        ( meshRingInner, shadowRingInner ) =
+            model.meshes.thingToProtect.ringInner
+
+        ( meshRingMiddle, shadowRingMiddle ) =
+            model.meshes.thingToProtect.ringMiddle
+
+        ( meshRingOuter, shadowRingOuter ) =
+            model.meshes.thingToProtect.ringOuter
+    in
+    Ecs.System.foldl2
+        (\position turns acc ->
+            let
+                translateBy : Vector3d Length.Meters WorldCoordinates
+                translateBy =
+                    originPosition
+                        |> Vector3d.from Point3d.origin
+
+                originPosition : Point3d Length.Meters WorldCoordinates
+                originPosition =
+                    position
+                        |> Hex.toPoint2d hexMapLayout
+                        |> Point3d.on SketchPlane3d.xy
+                        |> Point3d.translateIn Direction3d.positiveZ (Length.meters 2)
+
+                core3d : Scene3d.Entity WorldCoordinates
+                core3d =
+                    Scene3d.meshWithShadow
+                        (Scene3d.Material.metal
+                            { baseColor = Color.yellow
+                            , roughness = 0.5
+                            }
+                        )
+                        meshCore
+                        shadowCore
+                        |> Scene3d.translateBy translateBy
+
+                ringInner3d : Scene3d.Entity WorldCoordinates
+                ringInner3d =
+                    Scene3d.meshWithShadow
+                        (Scene3d.Material.metal
+                            { baseColor = Color.lightBlue
+                            , roughness = 0.5
+                            }
+                        )
+                        meshRingInner
+                        shadowRingInner
+                        |> Scene3d.translateBy translateBy
+                        |> Scene3d.rotateAround
+                            (Axis3d.through originPosition
+                                Direction3d.positiveX
+                            )
+                            turns
+
+                ringMiddle3d : Scene3d.Entity WorldCoordinates
+                ringMiddle3d =
+                    Scene3d.meshWithShadow
+                        (Scene3d.Material.metal
+                            { baseColor = Color.lightRed
+                            , roughness = 0.5
+                            }
+                        )
+                        meshRingMiddle
+                        shadowRingMiddle
+                        |> Scene3d.translateBy translateBy
+                        |> Scene3d.rotateAround
+                            (Axis3d.through originPosition
+                                Direction3d.positiveZ
+                            )
+                            turns
+
+                ringOuter3d : Scene3d.Entity WorldCoordinates
+                ringOuter3d =
+                    Scene3d.meshWithShadow
+                        (Scene3d.Material.metal
+                            { baseColor = Color.lightGreen
+                            , roughness = 0.5
+                            }
+                        )
+                        meshRingOuter
+                        shadowRingOuter
+                        |> Scene3d.translateBy translateBy
+                        |> Scene3d.rotateAround
+                            (Axis3d.through originPosition
+                                Direction3d.positiveY
+                            )
+                            turns
+            in
+            core3d
+                :: ringInner3d
+                :: ringMiddle3d
+                :: ringOuter3d
+                :: acc
+        )
+        model.positionComponent
+        model.thingToProtectAnimationComponent
         []
 
 
