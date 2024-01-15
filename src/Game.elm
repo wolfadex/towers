@@ -86,11 +86,12 @@ type Model
 
 
 type alias InitializingModel =
-    Task.Parallel.State5 Msg RawMesh RawMesh EnemySphereRawMesh WallRawMesh ThingToProtectRawMesh
+    Task.Parallel.State6 Msg RawMesh RawMesh RawMesh EnemySphereRawMesh WallRawMesh ThingToProtectRawMesh
 
 
 type alias ReadyModel =
     { tilemap : Hex.Map ( Scene3d.Entity WorldCoordinates, Maybe Ecs.Entity )
+    , highlightedTile : Maybe Hex
     , cameraPosition : Point2d Pixels ScreenCoordinates
     , seed : Random.Seed
     , lastTimestamp : Time.Posix
@@ -125,6 +126,7 @@ type alias ReadyModel =
 type alias Meshes =
     { laserTower : MeshAndShadow
     , hexTile : MeshAndShadow
+    , hexTileHighlight : MeshAndShadow
     , enemySphere : EnemySphereMeshAndShadow
     , wall : WallMeshAndShadow
     , thingToProtect : ThingToProtectMeshAndShadow
@@ -369,7 +371,7 @@ decodeStringResolver stringDecoder response =
 
 
 loadMeshes :
-    ( Task.Parallel.State5 Msg RawMesh RawMesh EnemySphereRawMesh WallRawMesh ThingToProtectRawMesh
+    ( Task.Parallel.State6 Msg RawMesh RawMesh RawMesh EnemySphereRawMesh WallRawMesh ThingToProtectRawMesh
     , Cmd Msg
     )
 loadMeshes =
@@ -379,17 +381,18 @@ loadMeshes =
             meshFilterNameEquals name
                 (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
     in
-    Task.Parallel.attempt5
+    Task.Parallel.attempt6
         { task1 = getMesh "laser_tower" (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
         , task2 = getMesh "ground_hex" (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
-        , task3 =
+        , task3 = getMesh "ground_hex_highlight" (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
+        , task4 =
             getMesh "enemy_sphere"
                 -- (Obj.Decode.texturedFacesIn Frame3d.atOrigin)
                 (Obj.Decode.map2 EnemySphereRawMesh
                     (namedTexturedFacesIn "Core")
                     (namedTexturedFacesIn "Disc")
                 )
-        , task4 =
+        , task5 =
             getMesh "wall"
                 (Obj.Decode.succeed WallRawMesh
                     |> Util.Obj.Decode.andMap (namedTexturedFacesIn "Core")
@@ -400,7 +403,7 @@ loadMeshes =
                     |> Util.Obj.Decode.andMap (namedTexturedFacesIn "Section_W")
                     |> Util.Obj.Decode.andMap (namedTexturedFacesIn "Section_NW")
                 )
-        , task5 =
+        , task6 =
             getMesh "thing_to_protect"
                 (Obj.Decode.map4 ThingToProtectRawMesh
                     (namedTexturedFacesIn "Core")
@@ -656,10 +659,11 @@ subscriptions cfg model =
 type Msg
     = Tick Time.Posix
     | Clicked (Point2d Pixels ScreenCoordinates)
+    | MouseMoved (Point2d Pixels ScreenCoordinates)
     | TrapTypeSelected TrapType
-    | MeshesLoading (Task.Parallel.Msg5 RawMesh RawMesh EnemySphereRawMesh WallRawMesh ThingToProtectRawMesh)
+    | MeshesLoading (Task.Parallel.Msg6 RawMesh RawMesh RawMesh EnemySphereRawMesh WallRawMesh ThingToProtectRawMesh)
     | MeshesLoadFailed Http.Error
-    | MeshesLoaded RawMesh RawMesh EnemySphereRawMesh WallRawMesh ThingToProtectRawMesh
+    | MeshesLoaded RawMesh RawMesh RawMesh EnemySphereRawMesh WallRawMesh ThingToProtectRawMesh
     | TimeInitialized Meshes Time.Posix
 
 
@@ -718,7 +722,7 @@ updateInitializing cfg msg model =
             MeshesLoading msg_ ->
                 let
                     ( nextMeshLoadingModel, meshLoadingCmd ) =
-                        Task.Parallel.update5 model msg_
+                        Task.Parallel.update6 model msg_
                 in
                 nextMeshLoadingModel
                     |> Initializing
@@ -749,7 +753,7 @@ updateInitializing cfg msg model =
                     |> InitializingFailed
                     |> Tea.save
 
-            MeshesLoaded laserTowerMesh hexTileMesh enemySphereMesh wallMesh thingToProtect ->
+            MeshesLoaded laserTowerMesh hexTileMesh hexTileHighlightMesh enemySphereMesh wallMesh thingToProtect ->
                 let
                     initMesh : RawMesh -> ( Scene3d.Mesh.Textured WorldCoordinates, Scene3d.Mesh.Shadow WorldCoordinates )
                     initMesh m =
@@ -771,6 +775,7 @@ updateInitializing cfg msg model =
                                 (TimeInitialized
                                     { laserTower = initMesh laserTowerMesh
                                     , hexTile = initMesh hexTileMesh
+                                    , hexTileHighlight = initMesh hexTileHighlightMesh
                                     , enemySphere =
                                         { core = initMesh enemySphereMesh.core
                                         , disc = initMesh enemySphereMesh.disc
@@ -840,6 +845,7 @@ initReady cfg =
                 |> Dict.fromList
     in
     { tilemap = tilemap
+    , highlightedTile = Nothing
     , cameraPosition = Point2d.origin
     , seed =
         cfg.currentTime
@@ -914,17 +920,45 @@ updateReady cfg msg model =
                     }
                         |> Tea.save
 
+                MouseMoved screenPoint ->
+                    let
+                        maybeClickedPoint : Maybe (Point3d Length.Meters WorldCoordinates)
+                        maybeClickedPoint =
+                            Camera3d.ray
+                                defaultCamera
+                                screenRectangle
+                                screenPoint
+                                |> Axis3d.intersectionWithPlane Plane3d.xy
+                    in
+                    case maybeClickedPoint of
+                        Nothing ->
+                            { model
+                                | highlightedTile = Nothing
+                            }
+                                |> Tea.save
+
+                        Just clickedPoint ->
+                            let
+                                hex : Hex
+                                hex =
+                                    clickedPoint
+                                        |> Point3d.projectInto SketchPlane3d.xy
+                                        |> Hex.fromPoint2d hexMapLayout
+                                        |> Hex.toIntCoordinates
+                            in
+                            { model
+                                | highlightedTile =
+                                    case Dict.get (Hex.toKey hex) model.tilemap of
+                                        Nothing ->
+                                            Nothing
+
+                                        Just _ ->
+                                            Just hex
+                            }
+                                |> Tea.save
+
                 Clicked screenPoint ->
                     let
-                        screenRectangle : Rectangle2d Pixels ScreenCoordinates
-                        screenRectangle =
-                            Rectangle2d.with
-                                { x1 = Pixels.pixels 0
-                                , y1 = Pixels.pixels 600
-                                , x2 = Pixels.pixels 800
-                                , y2 = Pixels.pixels 0
-                                }
-
                         maybeClickedPoint : Maybe (Point3d Length.Meters WorldCoordinates)
                         maybeClickedPoint =
                             Camera3d.ray
@@ -971,6 +1005,16 @@ updateReady cfg msg model =
                 _ ->
                     model
                         |> Tea.save
+
+
+screenRectangle : Rectangle2d Pixels ScreenCoordinates
+screenRectangle =
+    Rectangle2d.with
+        { x1 = Pixels.pixels 0
+        , y1 = Pixels.pixels 600
+        , x2 = Pixels.pixels 800
+        , y2 = Pixels.pixels 0
+        }
 
 
 updateWallSections : ReadyModel -> ReadyModel
@@ -1534,6 +1578,7 @@ viewReady model =
         ]
     , Html.div
         [ Html.Events.on "click" decodeClick
+        , Html.Events.on "mousemove" decodeMouseMove
         , Html.Attributes.style "width" "800px"
         , Html.Attributes.style "height" "600px"
         ]
@@ -1555,6 +1600,7 @@ viewReady model =
             , entities =
                 List.concat
                     [ viewHexGridMap3d model.tilemap
+                    , viewHighlightedTile3d model.highlightedTile model.meshes.hexTileHighlight
                     , viewEnemies3d model
                     , viewStaticMeshes model
                     , viewAttacks3d model
@@ -1596,6 +1642,17 @@ decodeClick =
         (\x y ->
             Point2d.pixels x y
                 |> Clicked
+        )
+        (Json.Decode.field "offsetX" Json.Decode.float)
+        (Json.Decode.field "offsetY" Json.Decode.float)
+
+
+decodeMouseMove : Json.Decode.Decoder Msg
+decodeMouseMove =
+    Json.Decode.map2
+        (\x y ->
+            Point2d.pixels x y
+                |> MouseMoved
         )
         (Json.Decode.field "offsetX" Json.Decode.float)
         (Json.Decode.field "offsetY" Json.Decode.float)
@@ -1807,6 +1864,33 @@ viewHexGridMap3d hexMap =
     hexMap
         |> Dict.values
         |> List.map Tuple.first
+
+
+viewHighlightedTile3d : Maybe Hex -> MeshAndShadow -> List (Scene3d.Entity WorldCoordinates)
+viewHighlightedTile3d maybeHighlitedHex ( mesh, shadow ) =
+    case maybeHighlitedHex of
+        Nothing ->
+            []
+
+        Just highlightedHex ->
+            let
+                translateBy : Vector3d Length.Meters WorldCoordinates
+                translateBy =
+                    highlightedHex
+                        |> Hex.toPoint2d hexMapLayout
+                        |> Point3d.on SketchPlane3d.xy
+                        |> Vector3d.from Point3d.origin
+            in
+            [ Scene3d.meshWithShadow
+                (Scene3d.Material.metal
+                    { baseColor = Color.lightRed
+                    , roughness = 0.7
+                    }
+                )
+                mesh
+                shadow
+                |> Scene3d.translateBy translateBy
+            ]
 
 
 meter : { percent : Float, color : String } -> Html msg
