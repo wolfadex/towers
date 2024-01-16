@@ -4,6 +4,7 @@ module Hex exposing
     , toQ, toQInt, toR, toRInt, toS, toSInt
     , toQRS, toQRSInt, fromQRSInt
     , fromInt, fromFloat, toIntCoordinates, toFloatCoordinates
+    , encode, decode
     , similar, dissimilar
     , plus, minus, multiplyBy
     , length, distance
@@ -35,6 +36,8 @@ Forked from <https://github.com/Voronchuk/hexagons>
 @docs toQ, toQInt, toR, toRInt, toS, toSInt
 @docs toQRS, toQRSInt, fromQRSInt
 @docs fromInt, fromFloat, toIntCoordinates, toFloatCoordinates
+
+@docs encode, decode
 
 
 # Equality
@@ -76,6 +79,8 @@ Forked from <https://github.com/Voronchuk/hexagons>
 -}
 
 import Dict exposing (Dict)
+import Json.Decode
+import Json.Encode
 import Point2d exposing (Point2d)
 
 
@@ -113,6 +118,27 @@ type Hex
     = FloatCubeHex FloatCubeCoords
     | IntCubeHex IntCubeCoords
     | AxialHex AxialCoords
+
+
+{-| Always encodes using Int coordinates
+-}
+encode : Hex -> Json.Encode.Value
+encode hex =
+    Json.Encode.object
+        [ ( "q", Json.Encode.int (toQInt hex) )
+        , ( "r", Json.Encode.int (toRInt hex) )
+        , ( "s", Json.Encode.int (toSInt hex) )
+        ]
+
+
+{-| Always decodes using Int coordinates
+-}
+decode : Json.Decode.Decoder Hex
+decode =
+    Json.Decode.map3 (\q r s -> IntCubeHex ( q, r, s ))
+        (Json.Decode.field "q" Json.Decode.int)
+        (Json.Decode.field "r" Json.Decode.int)
+        (Json.Decode.field "s" Json.Decode.int)
 
 
 {-| Direction ranges from 0 to 5 by sides of the hexagon, we use North, South, West, East definitions for simplicity

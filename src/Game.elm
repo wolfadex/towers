@@ -36,7 +36,6 @@ import Ecs.Component
 import Ecs.Config
 import Ecs.Entity
 import Ecs.System
-import Frame3d
 import Hex exposing (Hex)
 import Html exposing (Html)
 import Html.Attributes
@@ -47,7 +46,6 @@ import Length
 import LineSegment3d
 import List.Extra
 import Meshes exposing (Meshes)
-import Obj.Decode
 import Pixels exposing (Pixels)
 import Plane3d
 import Point2d exposing (Point2d)
@@ -61,14 +59,12 @@ import Scene3d.Material
 import Scene3d.Mesh
 import Set
 import SketchPlane3d
-import Task exposing (Task)
+import Task
 import Tea exposing (Tea)
 import Time
-import TriangularMesh exposing (TriangularMesh)
 import Util.Dict
 import Util.Ecs.Component
 import Util.Maybe
-import Util.Obj.Decode
 import Vector3d exposing (Vector3d)
 import Viewpoint3d exposing (Viewpoint3d)
 
@@ -1105,7 +1101,7 @@ moveCamera deltaTime model =
             rotationSpeed : AngularSpeed
             rotationSpeed =
                 desiredRotationSign
-                    |> (*) 45
+                    |> (*) 75
                     |> AngularSpeed.degreesPerSecond
 
             maxRotationAmount : Angle
@@ -1505,7 +1501,7 @@ viewReady model =
                 [ Html.Events.onClick (TrapTypeSelected AttackTower)
                 , case model.trapType of
                     AttackTower ->
-                        Css.selectedTrap
+                        Css.selectedButton
 
                     _ ->
                         Html.Attributes.class ""
@@ -1515,7 +1511,7 @@ viewReady model =
                 [ Html.Events.onClick (TrapTypeSelected BlockingWall)
                 , case model.trapType of
                     BlockingWall ->
-                        Css.selectedTrap
+                        Css.selectedButton
 
                     _ ->
                         Html.Attributes.class ""

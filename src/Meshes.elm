@@ -1,7 +1,6 @@
 module Meshes exposing
     ( EnemySphereMeshAndShadow
     , EnemySphereRawMesh
-    , LoadedMsg
     , LoadingMsg
     , MeshAndShadow
     , Meshes
@@ -11,30 +10,23 @@ module Meshes exposing
     , ThingToProtectRawMesh
     , WallMeshAndShadow
     , WallRawMesh
-    , decodeStringResolver
     , fromRaw
-    , getMesh
     , init
-    , meshFilterNameEquals
     , update
     )
 
 import Frame3d
 import Http
-import Json.Decode
 import Length
 import Obj.Decode
 import Point3d exposing (Point3d)
 import Quantity
-import Scene3d
-import Scene3d.Material
 import Scene3d.Mesh
 import Task exposing (Task)
 import Task.Parallel
 import TriangularMesh exposing (TriangularMesh)
 import Util.Obj.Decode
 import Vector3d exposing (Vector3d)
-import Viewpoint3d exposing (Viewpoint3d)
 
 
 type alias Meshes coordinates =
@@ -160,15 +152,6 @@ type alias LoadingMsg coordinates =
         (EnemySphereRawMesh coordinates)
         (WallRawMesh coordinates)
         (ThingToProtectRawMesh coordinates)
-
-
-type alias LoadedMsg coordinates =
-    RawMesh coordinates
-    -> RawMesh coordinates
-    -> RawMesh coordinates
-    -> EnemySphereRawMesh coordinates
-    -> WallRawMesh coordinates
-    -> ThingToProtectRawMesh coordinates
 
 
 type alias Model coordinates msg =

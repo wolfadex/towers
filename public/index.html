@@ -25,7 +25,7 @@
                 flags: Date.now(),
             });
 
-            app.ports.openModal.subscribe((modalId) => {
+            app.ports.openModal.subscribe(function (modalId) {
                 const modal = document.getElementById(modalId);
 
                 if (modal) {
@@ -33,12 +33,16 @@
                 }
             });
 
-            app.ports.closeModal.subscribe((modalId) => {
+            app.ports.closeModal.subscribe(function (modalId) {
                 const modal = document.getElementById(modalId);
 
                 if (modal) {
                     modal.close();
                 }
+            });
+
+            app.ports.copyToClipboard.subscribe(async function (text) {
+                await navigator.clipboard.writeText(text);
             });
         </script>
     </body>

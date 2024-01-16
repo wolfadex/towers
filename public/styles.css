@@ -176,7 +176,7 @@ label {
     gap: 1rem;
 }
 
-.selectedTrap {
+.selectedButton {
     background-color: var(--color-blue);
 }
 
@@ -188,8 +188,16 @@ label {
 
 .cameraControls {
     display: flex;
-    justify-content: space-between;
+    gap: 1rem;
     padding: 1rem;
+    align-items: center;
+}
+
+.saveLoadControls {
+    display: flex;
+    gap: 1rem;
+    padding: 1rem;
+    align-items: center;
 }
 
 dialog[open] {
@@ -201,4 +209,29 @@ dialog[open] {
 
 dialog::backdrop {
     background-color: rgba(0, 0, 0, 0.5);
+}
+
+.editorControls {
+    display: grid;
+    grid-template-columns: 6rem repeat(4, 1fr);
+    padding: 1rem;
+    gap: 1rem;
+}
+
+.editorControls label {
+    white-space: nowrap;
+    margin-top: 0.5rem;
+}
+
+.levelExport {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.levelImportError {
+    max-width: 30rem;
+    max-height: 10rem;
+    overflow: auto;
+    border: 1px solid black;
 }
