@@ -1,8 +1,22 @@
-module LevelEditor exposing (HandedDirection(..), InitializingModel, Key, Model(..), Msg(..), PaintMode(..), ReadyModel, ScreenCoordinates(..), WorldCoordinates(..), init, subscriptions, update, view)
+module LevelEditor exposing
+    ( HandedDirection(..)
+    , InitializingModel
+    , Model(..)
+    , Msg(..)
+    , PaintMode(..)
+    , ReadyModel
+    , ScreenCoordinates(..)
+    , WorldCoordinates(..)
+    , init
+    , subscriptions
+    , update
+    , view
+    )
 
 import Angle exposing (Angle)
 import AngularSpeed exposing (AngularSpeed)
 import Axis3d
+import Browser.Dom
 import Browser.Events
 import Camera3d exposing (Camera3d)
 import Color
@@ -15,6 +29,7 @@ import Html exposing (Html)
 import Html.Attributes
 import Html.Events
 import Http
+import Input
 import Json.Decode
 import Json.Encode
 import Length
@@ -25,7 +40,7 @@ import Plane3d
 import Point2d exposing (Point2d)
 import Point3d exposing (Point3d)
 import Ports
-import Quantity
+import Quantity exposing (Quantity)
 import Rectangle2d exposing (Rectangle2d)
 import Scene3d
 import Scene3d.Material
@@ -50,21 +65,27 @@ type Model
 
 
 type alias InitializingModel =
-    Meshes.Model WorldCoordinates Msg
+    { meshes : Meshes.Model WorldCoordinates Msg
+    , windowSize : Point2d Pixels ScreenCoordinates
+    }
 
 
 type alias ReadyModel =
     { meshes : Meshes WorldCoordinates
+    , windowSize : Point2d Pixels ScreenCoordinates
     , lastTimestamp : Time.Posix
     , highlightedTile : Maybe Hex
     , cameraEyePoint : Point3d Length.Meters WorldCoordinates
     , cameraRotation : { current : Angle, destination : Angle }
     , level : Level
+    , levelHistory : List Level
+    , levelFuture : List Level
     , paintMode : PaintMode
     , isApplyingPaint : Bool
     , selectedProp : Level.Prop
     , levelToImport : String
     , levelToImportError : Maybe String
+    , input : Input.Keyboard
     }
 
 
@@ -97,7 +118,12 @@ init cfg =
         , onSuccess = MeshesLoaded
         }
         |> Tea.fromTuple
-        |> Tea.mapModel Initializing
+        |> Tea.mapModel (\meshes -> Initializing { meshes = meshes, windowSize = Point2d.origin })
+        |> Tea.withCmd
+            (Browser.Dom.getViewport
+                |> Task.map (\{ viewport } -> Point2d.pixels viewport.width viewport.height)
+                |> Task.perform WindowResized
+            )
         |> Tea.map cfg
 
 
@@ -111,45 +137,28 @@ subscriptions : { toMsg : Msg -> msg } -> Model -> Sub msg
 subscriptions cfg model =
     case model of
         Initializing _ ->
-            Sub.none
+            onWindowResize
+                |> Tea.mapSub cfg
 
         InitializingFailed _ ->
             Sub.none
 
         Ready _ ->
             [ Browser.Events.onAnimationFrame Tick
-            , Browser.Events.onKeyPress decodeKeyPressed
+            , Browser.Events.onKeyDown
+                (Json.Decode.map KeyDown Input.decodeKey)
+            , Browser.Events.onKeyUp
+                (Json.Decode.map KeyUp Input.decodeKey)
+            , onWindowResize
             ]
                 |> Sub.batch
                 |> Tea.mapSub cfg
 
 
-decodeKeyPressed : Json.Decode.Decoder Msg
-decodeKeyPressed =
-    Json.Decode.map5
-        (\key alt control shift meta ->
-            KeyPressed
-                { key = key
-                , alt = alt
-                , control = control
-                , shift = shift
-                , meta = meta
-                }
-        )
-        (Json.Decode.field "key" Json.Decode.string)
-        (Json.Decode.field "altKey" Json.Decode.bool)
-        (Json.Decode.field "ctrlKey" Json.Decode.bool)
-        (Json.Decode.field "shiftKey" Json.Decode.bool)
-        (Json.Decode.field "metaKey" Json.Decode.bool)
-
-
-type alias Key =
-    { key : String
-    , alt : Bool
-    , control : Bool
-    , shift : Bool
-    , meta : Bool
-    }
+onWindowResize : Sub Msg
+onWindowResize =
+    Browser.Events.onResize
+        (\width height -> WindowResized (Point2d.pixels (toFloat width) (toFloat height)))
 
 
 
@@ -160,7 +169,8 @@ type alias Key =
 
 type Msg
     = Tick Time.Posix
-    | KeyPressed Key
+    | KeyDown ( Input.Key, Time.Posix )
+    | KeyUp ( Input.Key, Time.Posix )
     | MouseDown (Point2d Pixels ScreenCoordinates)
     | MouseMoved (Point2d Pixels ScreenCoordinates)
     | MouseUp
@@ -178,6 +188,7 @@ type Msg
     | LevelToImportChanged String
     | CancelImport
     | DecodeImportLevel
+    | WindowResized (Point2d Pixels ScreenCoordinates)
 
 
 type HandedDirection
@@ -205,14 +216,9 @@ updateInitializing cfg msg model =
     Tea.map cfg <|
         case msg of
             MeshesLoading msg_ ->
-                let
-                    ( nextMeshLoadingModel, meshLoadingCmd ) =
-                        Meshes.update msg_ model
-                in
-                nextMeshLoadingModel
-                    |> Initializing
-                    |> Tea.save
-                    |> Tea.withCmd meshLoadingCmd
+                Meshes.update msg_ model.meshes
+                    |> Tea.fromTuple
+                    |> Tea.mapModel (\meshes -> Initializing { model | meshes = meshes })
 
             MeshesLoadFailed error ->
                 let
@@ -260,7 +266,13 @@ updateInitializing cfg msg model =
                 initReady
                     { currentTime = currentTime
                     , meshes = meshes
+                    , windowSize = model.windowSize
                     }
+
+            WindowResized windowSize ->
+                { model | windowSize = windowSize }
+                    |> Initializing
+                    |> Tea.save
 
             _ ->
                 model
@@ -268,20 +280,29 @@ updateInitializing cfg msg model =
                     |> Tea.save
 
 
-initReady : { currentTime : Time.Posix, meshes : Meshes WorldCoordinates } -> Tea Model Msg
+initReady :
+    { currentTime : Time.Posix
+    , meshes : Meshes WorldCoordinates
+    , windowSize : Point2d Pixels ScreenCoordinates
+    }
+    -> Tea Model Msg
 initReady cfg =
     Ready
         { level = Level.init
+        , levelHistory = []
+        , levelFuture = []
         , paintMode = Add
         , selectedProp = Level.Target
         , isApplyingPaint = False
         , meshes = cfg.meshes
+        , windowSize = cfg.windowSize
         , lastTimestamp = cfg.currentTime
         , highlightedTile = Nothing
         , cameraEyePoint = Point3d.meters 25 0 35
         , cameraRotation = { current = Angle.degrees 0, destination = Angle.degrees 0 }
         , levelToImport = ""
         , levelToImportError = Nothing
+        , input = Input.init
         }
         |> Tea.save
 
@@ -292,17 +313,10 @@ updateReady cfg msg model =
         Tea.mapModel Ready <|
             case msg of
                 Tick currentTimestamp ->
-                    let
-                        deltaTime : Duration
-                        deltaTime =
-                            (Time.posixToMillis currentTimestamp - Time.posixToMillis model.lastTimestamp)
-                                |> toFloat
-                                |> Duration.milliseconds
-                    in
-                    { model
-                        | lastTimestamp = currentTimestamp
-                    }
-                        |> moveCamera deltaTime
+                    tick currentTimestamp model
+
+                WindowResized windowSize ->
+                    { model | windowSize = windowSize }
                         |> Tea.save
 
                 PaintModeSelected paintMode ->
@@ -370,45 +384,18 @@ updateReady cfg msg model =
                     rotateCamera handedDirection model
                         |> Tea.save
 
-                KeyPressed { key, alt, control, meta } ->
-                    if (key == "a" || key == "A") && not alt && not control && not meta then
-                        rotateCamera Left model
-                            |> Tea.save
+                KeyUp ( key, timestamp ) ->
+                    { model
+                        | input = Input.keyUp key model.input
+                    }
+                        |> tick timestamp
 
-                    else if (key == "d" || key == "D") && not alt && not control && not meta then
-                        rotateCamera Right model
-                            |> Tea.save
-
-                    else if key == "1" && not alt && not control && not meta then
-                        { model | paintMode = Add }
-                            |> Tea.save
-
-                    else if key == "2" && not alt && not control && not meta then
-                        { model | paintMode = Erase }
-                            |> Tea.save
-
-                    else if key == "3" && not alt && not control && not meta then
-                        { model | paintMode = Place }
-                            |> Tea.save
-
-                    else if key == "4" && not alt && not control && not meta then
-                        { model | paintMode = Remove }
-                            |> Tea.save
-
-                    else if (key == "q" || key == "Q") && not alt && not control && not meta then
-                        { model | selectedProp = Level.Target }
-                            |> Tea.save
-
-                    else if (key == "w" || key == "W") && not alt && not control && not meta then
-                        { model | selectedProp = Level.Spawner }
-                            |> Tea.save
-                        -- else if (key == "e" || key == "E") && not alt && not control && not meta then
-                        --     { model | selectedProp = Level.Wall }
-                        --         |> Tea.save
-
-                    else
-                        model
-                            |> Tea.save
+                KeyDown ( key, timestamp ) ->
+                    { model
+                        | input = Input.keyDown key model.input
+                    }
+                        |> applyInput
+                        |> tick timestamp
 
                 MouseMoved screenPoint ->
                     let
@@ -416,7 +403,7 @@ updateReady cfg msg model =
                         maybeHoverPoint =
                             Camera3d.ray
                                 (defaultCamera model.cameraRotation.current model.cameraEyePoint)
-                                screenRectangle
+                                (screenRectangle model.windowSize)
                                 screenPoint
                                 |> Axis3d.intersectionWithPlane Plane3d.xy
                     in
@@ -464,7 +451,7 @@ updateReady cfg msg model =
                         maybeClickedPoint =
                             Camera3d.ray
                                 (defaultCamera model.cameraRotation.current model.cameraEyePoint)
-                                screenRectangle
+                                (screenRectangle model.windowSize)
                                 screenPoint
                                 |> Axis3d.intersectionWithPlane Plane3d.xy
                     in
@@ -472,6 +459,8 @@ updateReady cfg msg model =
                         Nothing ->
                             { model
                                 | isApplyingPaint = True
+                                , levelHistory = model.level :: model.levelHistory
+                                , levelFuture = []
                             }
                                 |> Tea.save
 
@@ -486,6 +475,8 @@ updateReady cfg msg model =
                             in
                             { model
                                 | isApplyingPaint = True
+                                , levelHistory = model.level :: model.levelHistory
+                                , levelFuture = []
                                 , level =
                                     case model.paintMode of
                                         Add ->
@@ -511,6 +502,103 @@ updateReady cfg msg model =
                 _ ->
                     model
                         |> Tea.save
+
+
+applyInput : ReadyModel -> ReadyModel
+applyInput model =
+    let
+        undo : Bool
+        undo =
+            (Input.newKey "z"
+                |> Input.withControl
+                |> Input.isPressed model.input
+            )
+                || (Input.newKey "Z"
+                        |> Input.withControl
+                        |> Input.isPressed model.input
+                   )
+    in
+    if undo then
+        case model.levelHistory of
+            [] ->
+                model
+
+            previousLevel :: levelHistory ->
+                { model
+                    | level = previousLevel
+                    , levelHistory = levelHistory
+                    , levelFuture = model.level :: model.levelFuture
+                }
+
+    else
+        let
+            redo : Bool
+            redo =
+                (Input.newKey "z"
+                    |> Input.withControl
+                    |> Input.withShift
+                    |> Input.isPressed model.input
+                )
+                    || (Input.newKey "Z"
+                            |> Input.withControl
+                            |> Input.withShift
+                            |> Input.isPressed model.input
+                       )
+        in
+        if redo then
+            case model.levelFuture of
+                [] ->
+                    model
+
+                nextLevel :: levelFuture ->
+                    { model
+                        | level = nextLevel
+                        , levelHistory = model.level :: model.levelHistory
+                        , levelFuture = levelFuture
+                    }
+
+        else if Input.newKey "a" |> Input.isPressed model.input then
+            rotateCamera Left model
+
+        else if Input.newKey "d" |> Input.isPressed model.input then
+            rotateCamera Right model
+
+        else if Input.newKey "1" |> Input.isPressed model.input then
+            { model | paintMode = Add }
+
+        else if Input.newKey "2" |> Input.isPressed model.input then
+            { model | paintMode = Erase }
+
+        else if Input.newKey "3" |> Input.isPressed model.input then
+            { model | paintMode = Place }
+
+        else if Input.newKey "4" |> Input.isPressed model.input then
+            { model | paintMode = Remove }
+
+        else if Input.newKey "q" |> Input.isPressed model.input then
+            { model | selectedProp = Level.Target }
+
+        else if Input.newKey "w" |> Input.isPressed model.input then
+            { model | selectedProp = Level.Spawner }
+
+        else
+            model
+
+
+tick : Time.Posix -> ReadyModel -> Tea ReadyModel Msg
+tick timestamp model =
+    let
+        deltaTime : Duration
+        deltaTime =
+            (Time.posixToMillis timestamp - Time.posixToMillis model.lastTimestamp)
+                |> toFloat
+                |> Duration.milliseconds
+    in
+    { model
+        | lastTimestamp = timestamp
+    }
+        |> moveCamera deltaTime
+        |> Tea.save
 
 
 moveCamera : Duration -> ReadyModel -> ReadyModel
@@ -591,12 +679,27 @@ rotateCamera handedDirection model =
     }
 
 
-screenRectangle : Rectangle2d Pixels ScreenCoordinates
-screenRectangle =
+screenRectangle : Point2d Pixels ScreenCoordinates -> Rectangle2d Pixels ScreenCoordinates
+screenRectangle maxSize =
+    let
+        minWidth : Quantity Float Pixels
+        minWidth =
+            Point2d.xCoordinate maxSize
+
+        width : Quantity Float Pixels
+        width =
+            Quantity.min (Pixels.pixels 1920) minWidth
+
+        height : Quantity Float Pixels
+        height =
+            Pixels.pixels 1080
+                |> Quantity.times width
+                |> Quantity.over (Pixels.pixels 1920)
+    in
     Rectangle2d.with
         { x1 = Pixels.pixels 0
-        , y1 = Pixels.pixels 600
-        , x2 = Pixels.pixels 800
+        , y1 = height
+        , x2 = width
         , y2 = Pixels.pixels 0
         }
 
@@ -656,6 +759,37 @@ viewEditorButton isSelected onClick label =
 
 viewReady : ReadyModel -> List (Html Msg)
 viewReady model =
+    let
+        minWidth : Quantity Float Pixels
+        minWidth =
+            Point2d.xCoordinate model.windowSize
+
+        desiredWidth : Quantity Float Pixels
+        desiredWidth =
+            Pixels.pixels 1920
+
+        width : Quantity Float Pixels
+        width =
+            Quantity.min desiredWidth minWidth
+
+        height : Quantity Float Pixels
+        height =
+            Pixels.pixels 1080
+                |> Quantity.times width
+                |> Quantity.over desiredWidth
+
+        widthInt : Int
+        widthInt =
+            width
+                |> Pixels.inPixels
+                |> round
+
+        heightInt : Int
+        heightInt =
+            height
+                |> Pixels.inPixels
+                |> round
+    in
     [ Html.div
         [ Css.editorControls ]
         [ Html.label [] [ Html.text "Paint Mode:" ]
@@ -695,8 +829,8 @@ viewReady model =
         , Html.Events.on "mousemove" decodeMouseMove
         , Html.Events.on "mouseup" decodeMouseUp
         , Html.Events.on "mouseover" decodeMouseMove
-        , Html.Attributes.style "width" "800px"
-        , Html.Attributes.style "height" "600px"
+        , Html.Attributes.style "width" (String.fromInt widthInt ++ "px")
+        , Html.Attributes.style "height" (String.fromInt heightInt ++ "px")
         ]
         [ Scene3d.sunny
             { upDirection = Direction3d.positiveZ
@@ -709,7 +843,7 @@ viewReady model =
                         Axis3d.y
                         (Angle.degrees -5)
             , shadows = True
-            , dimensions = ( Pixels.int 800, Pixels.int 600 )
+            , dimensions = ( Pixels.int widthInt, Pixels.int heightInt )
             , camera = defaultCamera model.cameraRotation.current model.cameraEyePoint
             , clipDepth = Length.meters 0.1
             , background = Scene3d.backgroundColor Color.black

@@ -23,6 +23,7 @@ import Angle exposing (Angle)
 import AngularSpeed exposing (AngularSpeed)
 import Axis3d
 import Basics.Extra
+import Browser.Dom
 import Browser.Events
 import Camera3d exposing (Camera3d)
 import Color
@@ -50,7 +51,7 @@ import Pixels exposing (Pixels)
 import Plane3d
 import Point2d exposing (Point2d)
 import Point3d exposing (Point3d)
-import Quantity
+import Quantity exposing (Quantity)
 import Random
 import Random.List
 import Rectangle2d exposing (Rectangle2d)
@@ -82,7 +83,9 @@ type Model
 
 
 type alias InitializingModel =
-    Meshes.Model WorldCoordinates Msg
+    { meshes : Meshes.Model WorldCoordinates Msg
+    , windowSize : Point2d Pixels ScreenCoordinates
+    }
 
 
 type alias ReadyModel =
@@ -97,6 +100,7 @@ type alias ReadyModel =
     , tillNextWave : Maybe { initial : Duration, remaining : Duration }
     , trapType : TrapType
     , meshes : Meshes.Meshes WorldCoordinates
+    , windowSize : Point2d Pixels ScreenCoordinates
 
     -- ECS
     , ecsConfig : Ecs.Config
@@ -285,7 +289,12 @@ init cfg =
         , onSuccess = MeshesLoaded
         }
         |> Tea.fromTuple
-        |> Tea.mapModel Initializing
+        |> Tea.mapModel (\meshes -> Initializing { meshes = meshes, windowSize = Point2d.origin })
+        |> Tea.withCmd
+            (Browser.Dom.getViewport
+                |> Task.map (\{ viewport } -> Point2d.pixels viewport.width viewport.height)
+                |> Task.perform WindowResized
+            )
         |> Tea.map cfg
 
 
@@ -499,7 +508,8 @@ subscriptions : { toMsg : Msg -> msg } -> Model -> Sub msg
 subscriptions cfg model =
     case model of
         Initializing _ ->
-            Sub.none
+            onWindowResize
+                |> Tea.mapSub cfg
 
         InitializingFailed _ ->
             Sub.none
@@ -507,9 +517,16 @@ subscriptions cfg model =
         Ready _ ->
             [ Browser.Events.onAnimationFrame Tick
             , Browser.Events.onKeyPress decodeKeyPressed
+            , onWindowResize
             ]
                 |> Sub.batch
                 |> Tea.mapSub cfg
+
+
+onWindowResize : Sub Msg
+onWindowResize =
+    Browser.Events.onResize
+        (\width height -> WindowResized (Point2d.pixels (toFloat width) (toFloat height)))
 
 
 decodeKeyPressed : Json.Decode.Decoder Msg
@@ -557,6 +574,7 @@ type Msg
     | MeshesLoadFailed Http.Error
     | MeshesLoaded (Meshes.RawMesh WorldCoordinates) (Meshes.RawMesh WorldCoordinates) (Meshes.RawMesh WorldCoordinates) (Meshes.EnemySphereRawMesh WorldCoordinates) (Meshes.WallRawMesh WorldCoordinates) (Meshes.ThingToProtectRawMesh WorldCoordinates)
     | TimeInitialized (Meshes WorldCoordinates) Time.Posix
+    | WindowResized (Point2d Pixels ScreenCoordinates)
 
 
 type HandedDirection
@@ -584,14 +602,9 @@ updateInitializing cfg msg model =
     Tea.map cfg <|
         case msg of
             MeshesLoading msg_ ->
-                let
-                    ( nextMeshLoadingModel, meshLoadingCmd ) =
-                        Meshes.update msg_ model
-                in
-                nextMeshLoadingModel
-                    |> Initializing
-                    |> Tea.save
-                    |> Tea.withCmd meshLoadingCmd
+                Meshes.update msg_ model.meshes
+                    |> Tea.fromTuple
+                    |> Tea.mapModel (\meshes -> Initializing { model | meshes = meshes })
 
             MeshesLoadFailed error ->
                 let
@@ -639,7 +652,13 @@ updateInitializing cfg msg model =
                 initReady
                     { currentTime = currentTime
                     , meshes = meshes
+                    , windowSize = model.windowSize
                     }
+
+            WindowResized windowSize ->
+                { model | windowSize = windowSize }
+                    |> Initializing
+                    |> Tea.save
 
             _ ->
                 model
@@ -647,7 +666,12 @@ updateInitializing cfg msg model =
                     |> Tea.save
 
 
-initReady : { currentTime : Time.Posix, meshes : Meshes WorldCoordinates } -> Tea Model Msg
+initReady :
+    { currentTime : Time.Posix
+    , meshes : Meshes WorldCoordinates
+    , windowSize : Point2d Pixels ScreenCoordinates
+    }
+    -> Tea Model Msg
 initReady cfg =
     let
         ( mesh, shadow ) =
@@ -706,6 +730,7 @@ initReady cfg =
             }
     , trapType = AttackTower
     , meshes = cfg.meshes
+    , windowSize = cfg.windowSize
 
     -- ECS
     , ecsConfig = Ecs.Config.init
@@ -750,6 +775,10 @@ updateReady cfg msg model =
                         |> towerAttack deltaTime
                         |> moveEnemy deltaTime
                         |> enemyAttack
+                        |> Tea.save
+
+                WindowResized windowSize ->
+                    { model | windowSize = windowSize }
                         |> Tea.save
 
                 TrapTypeSelected trapType ->
@@ -1457,6 +1486,37 @@ view cfg model =
 
 viewReady : ReadyModel -> List (Html Msg)
 viewReady model =
+    let
+        minWidth : Quantity Float Pixels
+        minWidth =
+            Point2d.xCoordinate model.windowSize
+
+        desiredWidth : Quantity Float Pixels
+        desiredWidth =
+            Pixels.pixels 1920
+
+        width : Quantity Float Pixels
+        width =
+            Quantity.min desiredWidth minWidth
+
+        height : Quantity Float Pixels
+        height =
+            Pixels.pixels 1080
+                |> Quantity.times width
+                |> Quantity.over desiredWidth
+
+        widthInt : Int
+        widthInt =
+            width
+                |> Pixels.inPixels
+                |> round
+
+        heightInt : Int
+        heightInt =
+            height
+                |> Pixels.inPixels
+                |> round
+    in
     [ Html.div [ Css.gameHeader ]
         [ Html.label
             []
@@ -1522,8 +1582,8 @@ viewReady model =
     , Html.div
         [ Html.Events.on "click" decodeClick
         , Html.Events.on "mousemove" decodeMouseMove
-        , Html.Attributes.style "width" "800px"
-        , Html.Attributes.style "height" "600px"
+        , Html.Attributes.style "width" (String.fromInt widthInt ++ "px")
+        , Html.Attributes.style "height" (String.fromInt heightInt ++ "px")
         ]
         [ Scene3d.sunny
             { upDirection = Direction3d.positiveZ
@@ -1536,7 +1596,7 @@ viewReady model =
                         Axis3d.y
                         (Angle.degrees -5)
             , shadows = True
-            , dimensions = ( Pixels.int 800, Pixels.int 600 )
+            , dimensions = ( Pixels.int widthInt, Pixels.int heightInt )
             , camera = defaultCamera model.cameraRotation.current model.cameraEyePoint
             , clipDepth = Length.meters 0.1
             , background = Scene3d.backgroundColor Color.black

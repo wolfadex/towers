@@ -104,7 +104,18 @@ init =
 addTile : Hex -> Maybe Prop -> Level -> Level
 addTile hex prop level =
     { level
-        | tilemap = Dict.insert (Hex.toKey hex) prop level.tilemap
+        | tilemap =
+            Dict.update
+                (Hex.toKey hex)
+                (\maybeHex ->
+                    case maybeHex of
+                        Nothing ->
+                            Just prop
+
+                        Just _ ->
+                            maybeHex
+                )
+                level.tilemap
     }
 
 
