@@ -189,6 +189,8 @@ type Msg
     | CancelImport
     | DecodeImportLevel
     | WindowResized (Point2d Pixels ScreenCoordinates)
+    | Undo
+    | Redo
 
 
 type HandedDirection
@@ -397,6 +399,16 @@ updateReady cfg msg model =
                         |> applyInput
                         |> tick timestamp
 
+                Undo ->
+                    model
+                        |> levelUndo
+                        |> Tea.save
+
+                Redo ->
+                    model
+                        |> levelRedo
+                        |> Tea.save
+
                 MouseMoved screenPoint ->
                     let
                         maybeHoverPoint : Maybe (Point3d Length.Meters WorldCoordinates)
@@ -504,6 +516,34 @@ updateReady cfg msg model =
                         |> Tea.save
 
 
+levelUndo : ReadyModel -> ReadyModel
+levelUndo model =
+    case model.levelHistory of
+        [] ->
+            model
+
+        level :: levelHistory ->
+            { model
+                | level = level
+                , levelHistory = levelHistory
+                , levelFuture = model.level :: model.levelFuture
+            }
+
+
+levelRedo : ReadyModel -> ReadyModel
+levelRedo model =
+    case model.levelFuture of
+        [] ->
+            model
+
+        level :: levelFuture ->
+            { model
+                | level = level
+                , levelHistory = model.level :: model.levelHistory
+                , levelFuture = levelFuture
+            }
+
+
 applyInput : ReadyModel -> ReadyModel
 applyInput model =
     let
@@ -519,16 +559,7 @@ applyInput model =
                    )
     in
     if undo then
-        case model.levelHistory of
-            [] ->
-                model
-
-            previousLevel :: levelHistory ->
-                { model
-                    | level = previousLevel
-                    , levelHistory = levelHistory
-                    , levelFuture = model.level :: model.levelFuture
-                }
+        levelUndo model
 
     else
         let
@@ -546,16 +577,7 @@ applyInput model =
                        )
         in
         if redo then
-            case model.levelFuture of
-                [] ->
-                    model
-
-                nextLevel :: levelFuture ->
-                    { model
-                        | level = nextLevel
-                        , levelHistory = model.level :: model.levelHistory
-                        , levelFuture = levelFuture
-                    }
+            levelRedo model
 
         else if Input.newKey "a" |> Input.isPressed model.input then
             rotateCamera Left model
@@ -744,8 +766,8 @@ view cfg model =
                 viewReady readyModel
 
 
-viewEditorButton : Bool -> Msg -> String -> Html Msg
-viewEditorButton isSelected onClick label =
+viewEditorButton : String -> Bool -> Msg -> String -> Html Msg
+viewEditorButton shortcut isSelected onClick label =
     Html.button
         [ Html.Events.onClick onClick
         , if isSelected then
@@ -753,6 +775,7 @@ viewEditorButton isSelected onClick label =
 
           else
             Html.Attributes.class ""
+        , Html.Attributes.title ("Or press: " ++ shortcut)
         ]
         [ Html.text label ]
 
@@ -794,27 +817,33 @@ viewReady model =
         [ Css.editorControls ]
         [ Html.label [] [ Html.text "Paint Mode:" ]
         , viewEditorButton
+            "1"
             (model.paintMode == Add)
             (PaintModeSelected Add)
             "Add Tile"
         , viewEditorButton
+            "2"
             (model.paintMode == Erase)
             (PaintModeSelected Erase)
             "Erase Tile"
         , viewEditorButton
+            "3"
             (model.paintMode == Place)
             (PaintModeSelected Place)
             "Place Prop"
         , viewEditorButton
+            "4"
             (model.paintMode == Remove)
             (PaintModeSelected Remove)
             "Remove Prop"
         , Html.label [] [ Html.text "Prop:" ]
         , viewEditorButton
+            "q"
             (model.selectedProp == Level.Target)
             (PropSelected Level.Target)
             "Target"
         , viewEditorButton
+            "w"
             (model.selectedProp == Level.Spawner)
             (PropSelected Level.Spawner)
             "Spawner"
@@ -854,6 +883,19 @@ viewReady model =
                     ]
             }
         ]
+    , Html.div
+        [ Css.saveLoadControls ]
+        [ Html.button
+            [ Html.Events.onClick Undo
+            , Html.Attributes.title "Or press: Ctrl + z"
+            ]
+            [ Html.text "Undo" ]
+        , Html.button
+            [ Html.Events.onClick Redo
+            , Html.Attributes.title "Or press: Ctrl + Shift + z"
+            ]
+            [ Html.text "Redo" ]
+        ]
     , Html.div []
         [ Html.div
             [ Css.cameraControlsLabel ]
@@ -861,7 +903,9 @@ viewReady model =
         , Html.div
             [ Css.cameraControls ]
             [ Html.button
-                [ Html.Events.onClick (RotateCamera Left) ]
+                [ Html.Events.onClick (RotateCamera Left)
+                , Html.Attributes.title "Or press: a"
+                ]
                 [ Html.text "Rotate Left" ]
             , Html.span []
                 [ model.cameraRotation.current
@@ -872,7 +916,9 @@ viewReady model =
                     |> Html.text
                 ]
             , Html.button
-                [ Html.Events.onClick (RotateCamera Right) ]
+                [ Html.Events.onClick (RotateCamera Right)
+                , Html.Attributes.title "Or press: d"
+                ]
                 [ Html.text "Rotate Right" ]
             ]
         ]
