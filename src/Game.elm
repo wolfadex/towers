@@ -897,7 +897,7 @@ updateReady cfg msg model =
                         maybeClickedPoint =
                             Camera3d.ray
                                 (defaultCamera model.cameraRotation.current model.cameraEyePoint)
-                                screenRectangle
+                                (screenRectangle model.windowSize)
                                 screenPoint
                                 |> Axis3d.intersectionWithPlane Plane3d.xy
                     in
@@ -934,7 +934,7 @@ updateReady cfg msg model =
                         maybeClickedPoint =
                             Camera3d.ray
                                 (defaultCamera model.cameraRotation.current model.cameraEyePoint)
-                                screenRectangle
+                                (screenRectangle model.windowSize)
                                 screenPoint
                                 |> Axis3d.intersectionWithPlane Plane3d.xy
                     in
@@ -1004,12 +1004,27 @@ rotateCamera handedDirection model =
     }
 
 
-screenRectangle : Rectangle2d Pixels Meshes.ScreenCoordinates
-screenRectangle =
+screenRectangle : Point2d Pixels Meshes.ScreenCoordinates -> Rectangle2d Pixels Meshes.ScreenCoordinates
+screenRectangle maxSize =
+    let
+        minWidth : Quantity Float Pixels
+        minWidth =
+            Point2d.xCoordinate maxSize
+
+        width : Quantity Float Pixels
+        width =
+            Quantity.min (Pixels.pixels 1920) minWidth
+
+        height : Quantity Float Pixels
+        height =
+            Pixels.pixels 1080
+                |> Quantity.times width
+                |> Quantity.over (Pixels.pixels 1920)
+    in
     Rectangle2d.with
         { x1 = Pixels.pixels 0
-        , y1 = Pixels.pixels 600
-        , x2 = Pixels.pixels 800
+        , y1 = height
+        , x2 = width
         , y2 = Pixels.pixels 0
         }
 
