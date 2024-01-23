@@ -1,6 +1,6 @@
 [build]
   publish = "public/"
-  command = "npm run build"
+  command = "export ELM_HOME=\"$NETLIFY_BUILD_BASE/cache/elm\" && npm install && "
 
 [[redirects]]
   from = "/*"
