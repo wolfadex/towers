@@ -1,4 +1,26 @@
-module Level exposing (Level, Prop(..), addTile, decode, encode, init, removeProp, removeTile)
+module Level exposing
+    ( Level
+    , init, default
+    , encode, decode
+    , addTile, removeTile
+    , Prop(..)
+    , addProp, removeProp
+    , toMap
+    )
+
+{-|
+
+@docs Level
+@docs init, default
+@docs encode, decode
+@docs addTile, removeTile
+
+@docs Prop
+@docs addProp, removeProp
+
+@docs toMap
+
+-}
 
 import Dict
 import Hex exposing (Hex)
@@ -101,8 +123,64 @@ init =
     }
 
 
-addTile : Hex -> Maybe Prop -> Level -> Level
-addTile hex prop level =
+default : Level
+default =
+    { tilemap =
+        Hex.origin
+            |> Hex.circle 6
+            |> List.map (\hex -> ( Hex.toKey hex, Nothing ))
+            |> Dict.fromList
+    }
+        |> addProp Hex.origin Target
+        |> addProp
+            (Hex.origin
+                |> Hex.neighbor Hex.NorthEast
+                |> Hex.neighbor Hex.NorthEast
+                |> Hex.neighbor Hex.NorthEast
+                |> Hex.neighbor Hex.NorthEast
+                |> Hex.neighbor Hex.NorthEast
+                |> Hex.neighbor Hex.NorthEast
+            )
+            Spawner
+        |> addProp
+            (Hex.origin
+                |> Hex.neighbor Hex.NorthWest
+                |> Hex.neighbor Hex.NorthWest
+                |> Hex.neighbor Hex.NorthWest
+                |> Hex.neighbor Hex.NorthWest
+                |> Hex.neighbor Hex.NorthWest
+                |> Hex.neighbor Hex.NorthWest
+            )
+            Spawner
+        |> addProp
+            (Hex.origin
+                |> Hex.neighbor Hex.SouthWest
+                |> Hex.neighbor Hex.SouthWest
+                |> Hex.neighbor Hex.SouthWest
+                |> Hex.neighbor Hex.SouthWest
+                |> Hex.neighbor Hex.SouthWest
+                |> Hex.neighbor Hex.SouthWest
+            )
+            Spawner
+        |> addProp
+            (Hex.origin
+                |> Hex.neighbor Hex.SouthWest
+                |> Hex.neighbor Hex.SouthWest
+                |> Hex.neighbor Hex.SouthWest
+                |> Hex.neighbor Hex.SouthWest
+                |> Hex.neighbor Hex.SouthWest
+                |> Hex.neighbor Hex.SouthWest
+            )
+            Spawner
+
+
+toMap : Level -> Hex.Map (Maybe Prop)
+toMap level =
+    level.tilemap
+
+
+addTile : Hex -> Level -> Level
+addTile hex level =
     { level
         | tilemap =
             Dict.update
@@ -110,7 +188,7 @@ addTile hex prop level =
                 (\maybeHex ->
                     case maybeHex of
                         Nothing ->
-                            Just prop
+                            Just Nothing
 
                         Just _ ->
                             maybeHex
@@ -123,6 +201,17 @@ removeTile : Hex -> Level -> Level
 removeTile hex level =
     { level
         | tilemap = Dict.remove (Hex.toKey hex) level.tilemap
+    }
+
+
+addProp : Hex -> Prop -> Level -> Level
+addProp hex prop level =
+    { level
+        | tilemap =
+            Dict.insert
+                (Hex.toKey hex)
+                (Just prop)
+                level.tilemap
     }
 
 

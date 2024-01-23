@@ -5,8 +5,6 @@ module LevelEditor exposing
     , Msg(..)
     , PaintMode(..)
     , ReadyModel
-    , ScreenCoordinates(..)
-    , WorldCoordinates(..)
     , init
     , subscriptions
     , update
@@ -24,6 +22,7 @@ import Css
 import Dict
 import Direction3d
 import Duration exposing (Duration)
+import Game
 import Hex exposing (Hex)
 import Html exposing (Html)
 import Html.Attributes
@@ -65,17 +64,17 @@ type Model
 
 
 type alias InitializingModel =
-    { meshes : Meshes.Model WorldCoordinates Msg
-    , windowSize : Point2d Pixels ScreenCoordinates
+    { meshes : Meshes.Model Meshes.WorldCoordinates Msg
+    , windowSize : Point2d Pixels Meshes.ScreenCoordinates
     }
 
 
 type alias ReadyModel =
-    { meshes : Meshes WorldCoordinates
-    , windowSize : Point2d Pixels ScreenCoordinates
+    { meshes : Meshes Meshes.WorldCoordinates
+    , windowSize : Point2d Pixels Meshes.ScreenCoordinates
     , lastTimestamp : Time.Posix
     , highlightedTile : Maybe Hex
-    , cameraEyePoint : Point3d Length.Meters WorldCoordinates
+    , cameraEyePoint : Point3d Length.Meters Meshes.WorldCoordinates
     , cameraRotation : { current : Angle, destination : Angle }
     , level : Level
     , levelHistory : List Level
@@ -86,6 +85,7 @@ type alias ReadyModel =
     , levelToImport : String
     , levelToImportError : Maybe String
     , input : Input.Keyboard
+    , testing : Maybe Game.Model
     }
 
 
@@ -94,14 +94,6 @@ type PaintMode
     | Erase
     | Place
     | Remove
-
-
-type ScreenCoordinates
-    = ScreenCoordinates Never
-
-
-type WorldCoordinates
-    = WorldCoordinates Never
 
 
 
@@ -143,16 +135,23 @@ subscriptions cfg model =
         InitializingFailed _ ->
             Sub.none
 
-        Ready _ ->
-            [ Browser.Events.onAnimationFrame Tick
-            , Browser.Events.onKeyDown
-                (Json.Decode.map KeyDown Input.decodeKey)
-            , Browser.Events.onKeyUp
-                (Json.Decode.map KeyUp Input.decodeKey)
-            , onWindowResize
-            ]
-                |> Sub.batch
-                |> Tea.mapSub cfg
+        Ready readyModel ->
+            case readyModel.testing of
+                Just gameModel ->
+                    Game.subscriptions
+                        { toMsg = GameMsg >> cfg.toMsg }
+                        gameModel
+
+                Nothing ->
+                    [ Browser.Events.onAnimationFrame Tick
+                    , Browser.Events.onKeyDown
+                        (Json.Decode.map KeyDown Input.decodeKey)
+                    , Browser.Events.onKeyUp
+                        (Json.Decode.map KeyUp Input.decodeKey)
+                    , onWindowResize
+                    ]
+                        |> Sub.batch
+                        |> Tea.mapSub cfg
 
 
 onWindowResize : Sub Msg
@@ -171,14 +170,14 @@ type Msg
     = Tick Time.Posix
     | KeyDown ( Input.Key, Time.Posix )
     | KeyUp ( Input.Key, Time.Posix )
-    | MouseDown (Point2d Pixels ScreenCoordinates)
-    | MouseMoved (Point2d Pixels ScreenCoordinates)
+    | MouseDown (Point2d Pixels Meshes.ScreenCoordinates)
+    | MouseMoved (Point2d Pixels Meshes.ScreenCoordinates)
     | MouseUp
     | RotateCamera HandedDirection
-    | MeshesLoading (Meshes.LoadingMsg WorldCoordinates)
+    | MeshesLoading (Meshes.LoadingMsg Meshes.WorldCoordinates)
     | MeshesLoadFailed Http.Error
-    | MeshesLoaded (Meshes.RawMesh WorldCoordinates) (Meshes.RawMesh WorldCoordinates) (Meshes.RawMesh WorldCoordinates) (Meshes.EnemySphereRawMesh WorldCoordinates) (Meshes.WallRawMesh WorldCoordinates) (Meshes.ThingToProtectRawMesh WorldCoordinates)
-    | TimeInitialized (Meshes WorldCoordinates) Time.Posix
+    | MeshesLoaded (Meshes.RawMesh Meshes.WorldCoordinates) (Meshes.RawMesh Meshes.WorldCoordinates) (Meshes.RawMesh Meshes.WorldCoordinates) (Meshes.EnemySphereRawMesh Meshes.WorldCoordinates) (Meshes.WallRawMesh Meshes.WorldCoordinates) (Meshes.ThingToProtectRawMesh Meshes.WorldCoordinates)
+    | TimeInitialized (Meshes Meshes.WorldCoordinates) Time.Posix
     | PaintModeSelected PaintMode
     | PropSelected Level.Prop
     | ExportLevel
@@ -188,9 +187,12 @@ type Msg
     | LevelToImportChanged String
     | CancelImport
     | DecodeImportLevel
-    | WindowResized (Point2d Pixels ScreenCoordinates)
+    | WindowResized (Point2d Pixels Meshes.ScreenCoordinates)
     | Undo
     | Redo
+    | TestLevel
+    | GameMsg Game.Msg
+    | ContinueEditing
 
 
 type HandedDirection
@@ -284,8 +286,8 @@ updateInitializing cfg msg model =
 
 initReady :
     { currentTime : Time.Posix
-    , meshes : Meshes WorldCoordinates
-    , windowSize : Point2d Pixels ScreenCoordinates
+    , meshes : Meshes Meshes.WorldCoordinates
+    , windowSize : Point2d Pixels Meshes.ScreenCoordinates
     }
     -> Tea Model Msg
 initReady cfg =
@@ -305,6 +307,7 @@ initReady cfg =
         , levelToImport = ""
         , levelToImportError = Nothing
         , input = Input.init
+        , testing = Nothing
         }
         |> Tea.save
 
@@ -315,7 +318,9 @@ updateReady cfg msg model =
         Tea.mapModel Ready <|
             case msg of
                 Tick currentTimestamp ->
-                    tick currentTimestamp model
+                    model
+                        |> Tea.save
+                        |> tick currentTimestamp
 
                 WindowResized windowSize ->
                     { model | windowSize = windowSize }
@@ -390,6 +395,7 @@ updateReady cfg msg model =
                     { model
                         | input = Input.keyUp key model.input
                     }
+                        |> Tea.save
                         |> tick timestamp
 
                 KeyDown ( key, timestamp ) ->
@@ -409,9 +415,17 @@ updateReady cfg msg model =
                         |> levelRedo
                         |> Tea.save
 
+                TestLevel ->
+                    model
+                        |> testLevel
+
+                ContinueEditing ->
+                    { model | testing = Nothing }
+                        |> Tea.save
+
                 MouseMoved screenPoint ->
                     let
-                        maybeHoverPoint : Maybe (Point3d Length.Meters WorldCoordinates)
+                        maybeHoverPoint : Maybe (Point3d Length.Meters Meshes.WorldCoordinates)
                         maybeHoverPoint =
                             Camera3d.ray
                                 (defaultCamera model.cameraRotation.current model.cameraEyePoint)
@@ -441,13 +455,13 @@ updateReady cfg msg model =
                                     if model.isApplyingPaint then
                                         case model.paintMode of
                                             Add ->
-                                                Level.addTile hex Nothing model.level
+                                                Level.addTile hex model.level
 
                                             Erase ->
                                                 Level.removeTile hex model.level
 
                                             Place ->
-                                                Level.addTile hex (Just model.selectedProp) model.level
+                                                Level.addProp hex model.selectedProp model.level
 
                                             Remove ->
                                                 Level.removeProp hex model.level
@@ -459,7 +473,7 @@ updateReady cfg msg model =
 
                 MouseDown screenPoint ->
                     let
-                        maybeClickedPoint : Maybe (Point3d Length.Meters WorldCoordinates)
+                        maybeClickedPoint : Maybe (Point3d Length.Meters Meshes.WorldCoordinates)
                         maybeClickedPoint =
                             Camera3d.ray
                                 (defaultCamera model.cameraRotation.current model.cameraEyePoint)
@@ -492,13 +506,13 @@ updateReady cfg msg model =
                                 , level =
                                     case model.paintMode of
                                         Add ->
-                                            Level.addTile clickedHex Nothing model.level
+                                            Level.addTile clickedHex model.level
 
                                         Erase ->
                                             Level.removeTile clickedHex model.level
 
                                         Place ->
-                                            Level.addTile clickedHex (Just model.selectedProp) model.level
+                                            Level.addProp clickedHex model.selectedProp model.level
 
                                         Remove ->
                                             Level.removeProp clickedHex model.level
@@ -510,6 +524,19 @@ updateReady cfg msg model =
                         | isApplyingPaint = False
                     }
                         |> Tea.save
+
+                GameMsg gameMsg ->
+                    case model.testing of
+                        Nothing ->
+                            model |> Tea.save
+
+                        Just gameModel ->
+                            Game.update
+                                { toMsg = GameMsg
+                                , toModel = \gm -> { model | testing = Just gm }
+                                }
+                                gameMsg
+                                gameModel
 
                 _ ->
                     model
@@ -544,7 +571,7 @@ levelRedo model =
             }
 
 
-applyInput : ReadyModel -> ReadyModel
+applyInput : ReadyModel -> Tea ReadyModel Msg
 applyInput model =
     let
         undo : Bool
@@ -559,7 +586,9 @@ applyInput model =
                    )
     in
     if undo then
-        levelUndo model
+        model
+            |> levelUndo
+            |> Tea.save
 
     else
         let
@@ -577,50 +606,85 @@ applyInput model =
                        )
         in
         if redo then
-            levelRedo model
+            model
+                |> levelRedo
+                |> Tea.save
 
         else if Input.newKey "a" |> Input.isPressed model.input then
-            rotateCamera Left model
+            model
+                |> rotateCamera Left
+                |> Tea.save
 
         else if Input.newKey "d" |> Input.isPressed model.input then
-            rotateCamera Right model
+            model
+                |> rotateCamera Right
+                |> Tea.save
 
         else if Input.newKey "1" |> Input.isPressed model.input then
             { model | paintMode = Add }
+                |> Tea.save
 
         else if Input.newKey "2" |> Input.isPressed model.input then
             { model | paintMode = Erase }
+                |> Tea.save
 
         else if Input.newKey "3" |> Input.isPressed model.input then
             { model | paintMode = Place }
+                |> Tea.save
 
         else if Input.newKey "4" |> Input.isPressed model.input then
             { model | paintMode = Remove }
+                |> Tea.save
 
         else if Input.newKey "q" |> Input.isPressed model.input then
             { model | selectedProp = Level.Target }
+                |> Tea.save
 
         else if Input.newKey "w" |> Input.isPressed model.input then
             { model | selectedProp = Level.Spawner }
+                |> Tea.save
+
+        else if Input.newKey "Enter" |> Input.withControl |> Input.isPressed model.input then
+            model
+                |> testLevel
 
         else
             model
+                |> Tea.save
 
 
-tick : Time.Posix -> ReadyModel -> Tea ReadyModel Msg
-tick timestamp model =
-    let
-        deltaTime : Duration
-        deltaTime =
-            (Time.posixToMillis timestamp - Time.posixToMillis model.lastTimestamp)
-                |> toFloat
-                |> Duration.milliseconds
-    in
-    { model
-        | lastTimestamp = timestamp
-    }
-        |> moveCamera deltaTime
-        |> Tea.save
+testLevel : ReadyModel -> Tea ReadyModel Msg
+testLevel model =
+    Game.initWithCachedMeshes
+        { toMsg = GameMsg
+        , toModel =
+            \gameModel ->
+                { model
+                    | testing = Just gameModel
+                }
+        , currentTime = model.lastTimestamp
+        , meshes = model.meshes
+        , windowSize = model.windowSize
+        , level = model.level
+        }
+
+
+tick : Time.Posix -> Tea ReadyModel Msg -> Tea ReadyModel Msg
+tick timestamp =
+    Tea.mapModel
+        (\model ->
+            let
+                deltaTime : Duration
+                deltaTime =
+                    (Time.posixToMillis timestamp - Time.posixToMillis model.lastTimestamp)
+                        |> toFloat
+                        |> Duration.milliseconds
+            in
+            { model
+                | lastTimestamp = timestamp
+            }
+                |> moveCamera deltaTime
+        )
 
 
 moveCamera : Duration -> ReadyModel -> ReadyModel
@@ -701,7 +765,7 @@ rotateCamera handedDirection model =
     }
 
 
-screenRectangle : Point2d Pixels ScreenCoordinates -> Rectangle2d Pixels ScreenCoordinates
+screenRectangle : Point2d Pixels Meshes.ScreenCoordinates -> Rectangle2d Pixels Meshes.ScreenCoordinates
 screenRectangle maxSize =
     let
         minWidth : Quantity Float Pixels
@@ -782,226 +846,250 @@ viewEditorButton shortcut isSelected onClick label =
 
 viewReady : ReadyModel -> List (Html Msg)
 viewReady model =
-    let
-        minWidth : Quantity Float Pixels
-        minWidth =
-            Point2d.xCoordinate model.windowSize
+    case model.testing of
+        Just gameModel ->
+            viewGameTest gameModel
 
-        desiredWidth : Quantity Float Pixels
-        desiredWidth =
-            Pixels.pixels 1920
+        Nothing ->
+            let
+                minWidth : Quantity Float Pixels
+                minWidth =
+                    Point2d.xCoordinate model.windowSize
 
-        width : Quantity Float Pixels
-        width =
-            Quantity.min desiredWidth minWidth
+                desiredWidth : Quantity Float Pixels
+                desiredWidth =
+                    Pixels.pixels 1920
 
-        height : Quantity Float Pixels
-        height =
-            Pixels.pixels 1080
-                |> Quantity.times width
-                |> Quantity.over desiredWidth
+                width : Quantity Float Pixels
+                width =
+                    Quantity.min desiredWidth minWidth
 
-        widthInt : Int
-        widthInt =
-            width
-                |> Pixels.inPixels
-                |> round
+                height : Quantity Float Pixels
+                height =
+                    Pixels.pixels 1080
+                        |> Quantity.times width
+                        |> Quantity.over desiredWidth
 
-        heightInt : Int
-        heightInt =
-            height
-                |> Pixels.inPixels
-                |> round
-    in
-    [ Html.div
-        [ Css.editorControls ]
-        [ Html.label [] [ Html.text "Paint Mode:" ]
-        , viewEditorButton
-            "1"
-            (model.paintMode == Add)
-            (PaintModeSelected Add)
-            "Add Tile"
-        , viewEditorButton
-            "2"
-            (model.paintMode == Erase)
-            (PaintModeSelected Erase)
-            "Erase Tile"
-        , viewEditorButton
-            "3"
-            (model.paintMode == Place)
-            (PaintModeSelected Place)
-            "Place Prop"
-        , viewEditorButton
-            "4"
-            (model.paintMode == Remove)
-            (PaintModeSelected Remove)
-            "Remove Prop"
-        , Html.label [] [ Html.text "Prop:" ]
-        , viewEditorButton
-            "q"
-            (model.selectedProp == Level.Target)
-            (PropSelected Level.Target)
-            "Target"
-        , viewEditorButton
-            "w"
-            (model.selectedProp == Level.Spawner)
-            (PropSelected Level.Spawner)
-            "Spawner"
+                widthInt : Int
+                widthInt =
+                    width
+                        |> Pixels.inPixels
+                        |> round
 
-        -- , viewEditorButton
-        --     (model.selectedProp == Level.Wall)
-        --     (PropSelected Level.Wall)
-        --     "Wall"
-        ]
-    , Html.div
-        [ Html.Events.on "mousedown" decodeMouseDown
-        , Html.Events.on "mousemove" decodeMouseMove
-        , Html.Events.on "mouseup" decodeMouseUp
-        , Html.Events.on "mouseover" decodeMouseMove
-        , Html.Attributes.style "width" (String.fromInt widthInt ++ "px")
-        , Html.Attributes.style "height" (String.fromInt heightInt ++ "px")
-        ]
-        [ Scene3d.sunny
-            { upDirection = Direction3d.positiveZ
-            , sunlightDirection =
-                Direction3d.negativeZ
-                    |> Direction3d.rotateAround
-                        Axis3d.x
-                        (Angle.degrees 15)
-                    |> Direction3d.rotateAround
-                        Axis3d.y
-                        (Angle.degrees -5)
-            , shadows = True
-            , dimensions = ( Pixels.int widthInt, Pixels.int heightInt )
-            , camera = defaultCamera model.cameraRotation.current model.cameraEyePoint
-            , clipDepth = Length.meters 0.1
-            , background = Scene3d.backgroundColor Color.black
-            , entities =
-                List.concat
-                    [ viewHexGridMap3d model.meshes model.level.tilemap
-                    , viewHighlightedTile3d model.highlightedTile model.meshes.hexTileHighlight
-                    ]
-            }
-        ]
-    , Html.div
-        [ Css.saveLoadControls ]
-        [ Html.button
-            [ Html.Events.onClick Undo
-            , Html.Attributes.title "Or press: Ctrl + z"
-            ]
-            [ Html.text "Undo" ]
-        , Html.button
-            [ Html.Events.onClick Redo
-            , Html.Attributes.title "Or press: Ctrl + Shift + z"
-            ]
-            [ Html.text "Redo" ]
-        ]
-    , Html.div []
-        [ Html.div
-            [ Css.cameraControlsLabel ]
-            [ Html.text "Camera Controls" ]
-        , Html.div
-            [ Css.cameraControls ]
-            [ Html.button
-                [ Html.Events.onClick (RotateCamera Left)
-                , Html.Attributes.title "Or press: a"
+                heightInt : Int
+                heightInt =
+                    height
+                        |> Pixels.inPixels
+                        |> round
+            in
+            [ Html.div
+                [ Css.editorControls ]
+                [ Html.label [] [ Html.text "Paint Mode:" ]
+                , viewEditorButton
+                    "1"
+                    (model.paintMode == Add)
+                    (PaintModeSelected Add)
+                    "Add Tile"
+                , viewEditorButton
+                    "2"
+                    (model.paintMode == Erase)
+                    (PaintModeSelected Erase)
+                    "Erase Tile"
+                , viewEditorButton
+                    "3"
+                    (model.paintMode == Place)
+                    (PaintModeSelected Place)
+                    "Place Prop"
+                , viewEditorButton
+                    "4"
+                    (model.paintMode == Remove)
+                    (PaintModeSelected Remove)
+                    "Remove Prop"
+                , Html.label [] [ Html.text "Prop:" ]
+                , viewEditorButton
+                    "q"
+                    (model.selectedProp == Level.Target)
+                    (PropSelected Level.Target)
+                    "Target"
+                , viewEditorButton
+                    "w"
+                    (model.selectedProp == Level.Spawner)
+                    (PropSelected Level.Spawner)
+                    "Spawner"
+
+                -- , viewEditorButton
+                --     (model.selectedProp == Level.Wall)
+                --     (PropSelected Level.Wall)
+                --     "Wall"
                 ]
-                [ Html.text "Rotate Left" ]
-            , Html.span []
-                [ model.cameraRotation.current
-                    |> Angle.inDegrees
-                    |> round
-                    |> String.fromInt
-                    |> (\d -> d ++ "°")
-                    |> Html.text
+            , Html.div
+                [ Html.Events.on "mousedown" decodeMouseDown
+                , Html.Events.on "mousemove" decodeMouseMove
+                , Html.Events.on "mouseup" decodeMouseUp
+                , Html.Events.on "mouseover" decodeMouseMove
+                , Html.Attributes.style "width" (String.fromInt widthInt ++ "px")
+                , Html.Attributes.style "height" (String.fromInt heightInt ++ "px")
                 ]
-            , Html.button
-                [ Html.Events.onClick (RotateCamera Right)
-                , Html.Attributes.title "Or press: d"
-                ]
-                [ Html.text "Rotate Right" ]
-            ]
-        ]
-    , Html.div
-        [ Css.saveLoadControls ]
-        [ Html.button
-            [ Html.Events.onClick ExportLevel ]
-            [ Html.text "Export Level" ]
-        , let
-            levelJson : String
-            levelJson =
-                model.level
-                    |> Level.encode
-                    |> Json.Encode.encode 0
-          in
-          Html.node "dialog"
-            [ Html.Attributes.id "level-export"
-            ]
-            [ Html.div [ Css.levelExport ]
-                [ Html.label
-                    []
-                    [ Html.text "Level JSON:"
-                    ]
-                , Html.textarea
-                    [ Html.Attributes.readonly True
-                    , levelJson
-                        |> Html.Attributes.value
-                    ]
-                    []
-                , Html.br [] []
-                , Html.button
-                    [ Html.Events.onClick (CopyLevelJson levelJson) ]
-                    [ Html.text "Copy" ]
-                , Html.button
-                    [ Html.Events.onClick CancelExport ]
-                    [ Html.text "Close" ]
-                ]
-            ]
-        , Html.button
-            [ Html.Events.onClick ImportLevel ]
-            [ Html.text "Import Level" ]
-        , Html.node "dialog"
-            [ Html.Attributes.id "level-import" ]
-            [ Html.div [ Css.levelExport ]
-                [ Html.label
-                    []
-                    [ Html.text "Level JSON:"
-                    ]
-                , Html.textarea
-                    [ Html.Attributes.value model.levelToImport
-                    , Html.Events.onInput LevelToImportChanged
-                    ]
-                    []
-                , Html.br [] []
-                , case model.levelToImportError of
-                    Nothing ->
-                        Html.text ""
-
-                    Just error ->
-                        Html.div
-                            []
-                            [ Html.h4 [] [ Html.text "Error parsing data" ]
-                            , Html.p
-                                [ Css.levelImportError ]
-                                [ Html.text error ]
+                [ Scene3d.sunny
+                    { upDirection = Direction3d.positiveZ
+                    , sunlightDirection =
+                        Direction3d.negativeZ
+                            |> Direction3d.rotateAround
+                                Axis3d.x
+                                (Angle.degrees 15)
+                            |> Direction3d.rotateAround
+                                Axis3d.y
+                                (Angle.degrees -5)
+                    , shadows = True
+                    , dimensions = ( Pixels.int widthInt, Pixels.int heightInt )
+                    , camera = defaultCamera model.cameraRotation.current model.cameraEyePoint
+                    , clipDepth = Length.meters 0.1
+                    , background = Scene3d.backgroundColor Color.black
+                    , entities =
+                        List.concat
+                            [ viewHexGridMap3d model.meshes model.level.tilemap
+                            , viewHighlightedTile3d model.highlightedTile model.meshes.hexTileHighlight
                             ]
-                , Html.br [] []
+                    }
+                ]
+            , Html.div
+                [ Css.saveLoadControls ]
+                [ Html.button
+                    [ Html.Events.onClick Undo
+                    , Html.Attributes.title "Or press: Ctrl + z"
+                    ]
+                    [ Html.text "Undo" ]
                 , Html.button
-                    [ Html.Events.onClick DecodeImportLevel ]
-                    [ Html.text "Import" ]
+                    [ Html.Events.onClick Redo
+                    , Html.Attributes.title "Or press: Ctrl + Shift + z"
+                    ]
+                    [ Html.text "Redo" ]
                 , Html.button
-                    [ Html.Events.onClick CancelImport ]
-                    [ Html.text "Close" ]
+                    [ Html.Events.onClick TestLevel
+                    , Html.Attributes.title "Or press: Ctrl + Enter"
+                    ]
+                    [ Html.text "Test Level" ]
+                ]
+            , Html.div []
+                [ Html.div
+                    [ Css.cameraControlsLabel ]
+                    [ Html.text "Camera Controls" ]
+                , Html.div
+                    [ Css.cameraControls ]
+                    [ Html.button
+                        [ Html.Events.onClick (RotateCamera Left)
+                        , Html.Attributes.title "Or press: a"
+                        ]
+                        [ Html.text "Rotate Left" ]
+                    , Html.span []
+                        [ model.cameraRotation.current
+                            |> Angle.inDegrees
+                            |> round
+                            |> String.fromInt
+                            |> (\d -> d ++ "°")
+                            |> Html.text
+                        ]
+                    , Html.button
+                        [ Html.Events.onClick (RotateCamera Right)
+                        , Html.Attributes.title "Or press: d"
+                        ]
+                        [ Html.text "Rotate Right" ]
+                    ]
+                ]
+            , Html.div
+                [ Css.saveLoadControls ]
+                [ Html.button
+                    [ Html.Events.onClick ExportLevel ]
+                    [ Html.text "Export Level" ]
+                , let
+                    levelJson : String
+                    levelJson =
+                        model.level
+                            |> Level.encode
+                            |> Json.Encode.encode 0
+                  in
+                  Html.node "dialog"
+                    [ Html.Attributes.id "level-export"
+                    ]
+                    [ Html.div [ Css.levelExport ]
+                        [ Html.label
+                            []
+                            [ Html.text "Level JSON:"
+                            ]
+                        , Html.textarea
+                            [ Html.Attributes.readonly True
+                            , levelJson
+                                |> Html.Attributes.value
+                            ]
+                            []
+                        , Html.br [] []
+                        , Html.button
+                            [ Html.Events.onClick (CopyLevelJson levelJson) ]
+                            [ Html.text "Copy" ]
+                        , Html.button
+                            [ Html.Events.onClick CancelExport ]
+                            [ Html.text "Close" ]
+                        ]
+                    ]
+                , Html.button
+                    [ Html.Events.onClick ImportLevel ]
+                    [ Html.text "Import Level" ]
+                , Html.node "dialog"
+                    [ Html.Attributes.id "level-import" ]
+                    [ Html.div [ Css.levelExport ]
+                        [ Html.label
+                            []
+                            [ Html.text "Level JSON:"
+                            ]
+                        , Html.textarea
+                            [ Html.Attributes.value model.levelToImport
+                            , Html.Events.onInput LevelToImportChanged
+                            ]
+                            []
+                        , Html.br [] []
+                        , case model.levelToImportError of
+                            Nothing ->
+                                Html.text ""
+
+                            Just error ->
+                                Html.div
+                                    []
+                                    [ Html.h4 [] [ Html.text "Error parsing data" ]
+                                    , Html.p
+                                        [ Css.levelImportError ]
+                                        [ Html.text error ]
+                                    ]
+                        , Html.br [] []
+                        , Html.button
+                            [ Html.Events.onClick DecodeImportLevel ]
+                            [ Html.text "Import" ]
+                        , Html.button
+                            [ Html.Events.onClick CancelImport ]
+                            [ Html.text "Close" ]
+                        ]
+                    ]
                 ]
             ]
+
+
+viewGameTest : Game.Model -> List (Html Msg)
+viewGameTest gameModel =
+    [ Html.div [ Css.saveLoadControls ]
+        [ Html.button
+            [ Html.Events.onClick ContinueEditing ]
+            [ Html.text "Continue Editing" ]
         ]
+    , Game.view
+        { toMsg = GameMsg }
+        gameModel
+        |> Html.div []
     ]
 
 
-defaultCamera : Angle -> Point3d Length.Meters WorldCoordinates -> Camera3d Length.Meters WorldCoordinates
+defaultCamera : Angle -> Point3d Length.Meters Meshes.WorldCoordinates -> Camera3d Length.Meters Meshes.WorldCoordinates
 defaultCamera rotation eyePoint =
     let
-        cameraViewpoint : Viewpoint3d Length.Meters WorldCoordinates
+        cameraViewpoint : Viewpoint3d Length.Meters Meshes.WorldCoordinates
         cameraViewpoint =
             Viewpoint3d.lookAt
                 { eyePoint =
@@ -1054,7 +1142,7 @@ decodeMouseUp =
     Json.Decode.succeed MouseUp
 
 
-viewHexGridMap3d : Meshes WorldCoordinates -> Hex.Map (Maybe Level.Prop) -> List (Scene3d.Entity WorldCoordinates)
+viewHexGridMap3d : Meshes Meshes.WorldCoordinates -> Hex.Map (Maybe Level.Prop) -> List (Scene3d.Entity Meshes.WorldCoordinates)
 viewHexGridMap3d meshes hexMap =
     let
         ( meshTargetCore, shadowTargetCore ) =
@@ -1078,10 +1166,10 @@ viewHexGridMap3d meshes hexMap =
         ( meshSpawnerDisc, shadowSpawnerDisc ) =
             meshes.enemySphere.disc
 
-        toTileEntity : Hex.Key -> Scene3d.Entity WorldCoordinates
+        toTileEntity : Hex.Key -> Scene3d.Entity Meshes.WorldCoordinates
         toTileEntity key =
             let
-                translateBy : Vector3d Length.Meters WorldCoordinates
+                translateBy : Vector3d Length.Meters Meshes.WorldCoordinates
                 translateBy =
                     key
                         |> Hex.fromKey
@@ -1099,17 +1187,17 @@ viewHexGridMap3d meshes hexMap =
                 shadowTile
                 |> Scene3d.translateBy translateBy
 
-        viewProp : Hex.Key -> Level.Prop -> List (Scene3d.Entity WorldCoordinates)
+        viewProp : Hex.Key -> Level.Prop -> List (Scene3d.Entity Meshes.WorldCoordinates)
         viewProp key prop =
             case prop of
                 Level.Target ->
                     let
-                        translateBy : Vector3d Length.Meters WorldCoordinates
+                        translateBy : Vector3d Length.Meters Meshes.WorldCoordinates
                         translateBy =
                             originPosition
                                 |> Vector3d.from Point3d.origin
 
-                        originPosition : Point3d Length.Meters WorldCoordinates
+                        originPosition : Point3d Length.Meters Meshes.WorldCoordinates
                         originPosition =
                             key
                                 |> Hex.fromKey
@@ -1117,7 +1205,7 @@ viewHexGridMap3d meshes hexMap =
                                 |> Point3d.on SketchPlane3d.xy
                                 |> Point3d.translateIn Direction3d.positiveZ (Length.meters 2)
 
-                        core3d : Scene3d.Entity WorldCoordinates
+                        core3d : Scene3d.Entity Meshes.WorldCoordinates
                         core3d =
                             Scene3d.meshWithShadow
                                 (Scene3d.Material.metal
@@ -1129,7 +1217,7 @@ viewHexGridMap3d meshes hexMap =
                                 shadowTargetCore
                                 |> Scene3d.translateBy translateBy
 
-                        ringInner3d : Scene3d.Entity WorldCoordinates
+                        ringInner3d : Scene3d.Entity Meshes.WorldCoordinates
                         ringInner3d =
                             Scene3d.meshWithShadow
                                 (Scene3d.Material.metal
@@ -1141,7 +1229,7 @@ viewHexGridMap3d meshes hexMap =
                                 shadowRingInner
                                 |> Scene3d.translateBy translateBy
 
-                        ringMiddle3d : Scene3d.Entity WorldCoordinates
+                        ringMiddle3d : Scene3d.Entity Meshes.WorldCoordinates
                         ringMiddle3d =
                             Scene3d.meshWithShadow
                                 (Scene3d.Material.metal
@@ -1153,7 +1241,7 @@ viewHexGridMap3d meshes hexMap =
                                 shadowRingMiddle
                                 |> Scene3d.translateBy translateBy
 
-                        ringOuter3d : Scene3d.Entity WorldCoordinates
+                        ringOuter3d : Scene3d.Entity Meshes.WorldCoordinates
                         ringOuter3d =
                             Scene3d.meshWithShadow
                                 (Scene3d.Material.metal
@@ -1172,13 +1260,13 @@ viewHexGridMap3d meshes hexMap =
 
                 Level.Spawner ->
                     let
-                        translateBy : Vector3d Length.Meters WorldCoordinates
+                        translateBy : Vector3d Length.Meters Meshes.WorldCoordinates
                         translateBy =
                             originPosition
                                 |> Point3d.translateIn Direction3d.positiveZ (Length.meters 1.5)
                                 |> Vector3d.from Point3d.origin
 
-                        originPosition : Point3d Length.Meters WorldCoordinates
+                        originPosition : Point3d Length.Meters Meshes.WorldCoordinates
                         originPosition =
                             key
                                 |> Hex.fromKey
@@ -1205,7 +1293,7 @@ viewHexGridMap3d meshes hexMap =
                         |> Scene3d.translateBy translateBy
                     ]
 
-        toEntities : ( Hex.Key, Maybe Level.Prop ) -> List (Scene3d.Entity WorldCoordinates)
+        toEntities : ( Hex.Key, Maybe Level.Prop ) -> List (Scene3d.Entity Meshes.WorldCoordinates)
         toEntities ( key, maybeProp ) =
             toTileEntity key
                 :: (case maybeProp of
@@ -1221,7 +1309,7 @@ viewHexGridMap3d meshes hexMap =
         |> List.concatMap toEntities
 
 
-viewHighlightedTile3d : Maybe Hex -> Meshes.MeshAndShadow WorldCoordinates -> List (Scene3d.Entity WorldCoordinates)
+viewHighlightedTile3d : Maybe Hex -> Meshes.MeshAndShadow Meshes.WorldCoordinates -> List (Scene3d.Entity Meshes.WorldCoordinates)
 viewHighlightedTile3d maybeHighlitedHex ( mesh, _ ) =
     case maybeHighlitedHex of
         Nothing ->
@@ -1229,7 +1317,7 @@ viewHighlightedTile3d maybeHighlitedHex ( mesh, _ ) =
 
         Just highlightedHex ->
             let
-                translateBy : Vector3d Length.Meters WorldCoordinates
+                translateBy : Vector3d Length.Meters Meshes.WorldCoordinates
                 translateBy =
                     highlightedHex
                         |> Hex.toPoint2d hexMapLayout

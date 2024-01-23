@@ -7,12 +7,11 @@ module Game exposing
     , Model
     , Msg
     , Player(..)
-    , ScreenCoordinates(..)
     , Trap(..)
     , TrapType
     , Wave(..)
-    , WorldCoordinates(..)
     , init
+    , initWithCachedMeshes
     , subscriptions
     , update
     , view
@@ -44,6 +43,7 @@ import Html.Events
 import Http
 import Json.Decode
 import Length
+import Level exposing (Level)
 import LineSegment3d
 import List.Extra
 import Meshes exposing (Meshes)
@@ -83,15 +83,16 @@ type Model
 
 
 type alias InitializingModel =
-    { meshes : Meshes.Model WorldCoordinates Msg
-    , windowSize : Point2d Pixels ScreenCoordinates
+    { meshes : Meshes.Model Meshes.WorldCoordinates Msg
+    , windowSize : Point2d Pixels Meshes.ScreenCoordinates
+    , level : Level
     }
 
 
 type alias ReadyModel =
-    { tilemap : Hex.Map ( Scene3d.Entity WorldCoordinates, Maybe Ecs.Entity )
+    { tilemap : Hex.Map ( Scene3d.Entity Meshes.WorldCoordinates, Maybe Ecs.Entity )
     , highlightedTile : Maybe Hex
-    , cameraEyePoint : Point3d Length.Meters WorldCoordinates
+    , cameraEyePoint : Point3d Length.Meters Meshes.WorldCoordinates
     , cameraRotation : { current : Angle, destination : Angle }
     , seed : Random.Seed
     , lastTimestamp : Time.Posix
@@ -99,12 +100,12 @@ type alias ReadyModel =
     , waves : Maybe Wave
     , tillNextWave : Maybe { initial : Duration, remaining : Duration }
     , trapType : TrapType
-    , meshes : Meshes.Meshes WorldCoordinates
-    , windowSize : Point2d Pixels ScreenCoordinates
+    , meshes : Meshes.Meshes Meshes.WorldCoordinates
+    , windowSize : Point2d Pixels Meshes.ScreenCoordinates
 
     -- ECS
     , ecsConfig : Ecs.Config
-    , staticMeshComponent : Ecs.Component (Scene3d.Entity WorldCoordinates)
+    , staticMeshComponent : Ecs.Component (Scene3d.Entity Meshes.WorldCoordinates)
     , thingToProtectAnimationComponent : Ecs.Component Angle
     , positionComponent : Ecs.Component Hex
     , healthComponent : Ecs.Component Health
@@ -112,7 +113,7 @@ type alias ReadyModel =
         Ecs.Component
             { path : List Hex
             , distance : Float
-            , point : Point2d Length.Meters WorldCoordinates
+            , point : Point2d Length.Meters Meshes.WorldCoordinates
             }
     , playerComponent : Ecs.Component Player
     , enemyComponent : Ecs.Component Enemy
@@ -121,20 +122,13 @@ type alias ReadyModel =
     , attackStyleComponent : Ecs.Component AttackStyle
     , attackAnimationComponent : Ecs.Component AttackAnimation
     , wallComponent : Ecs.Component Wall
+    , targetComponent : Ecs.Component Ecs.Entity
     }
 
 
 type TrapType
     = AttackTower
     | BlockingWall
-
-
-type ScreenCoordinates
-    = ScreenCoordinates Never
-
-
-type WorldCoordinates
-    = WorldCoordinates Never
 
 
 ecsConfigSpec : Ecs.Config.Spec ReadyModel
@@ -144,7 +138,7 @@ ecsConfigSpec =
     }
 
 
-staticMeshSpec : Ecs.Component.Spec (Scene3d.Entity WorldCoordinates) ReadyModel
+staticMeshSpec : Ecs.Component.Spec (Scene3d.Entity Meshes.WorldCoordinates) ReadyModel
 staticMeshSpec =
     { get = .staticMeshComponent
     , set = \staticMeshComponent world -> { world | staticMeshComponent = staticMeshComponent }
@@ -182,7 +176,7 @@ pathSpec :
     Ecs.Component.Spec
         { path : List Hex
         , distance : Float
-        , point : Point2d Length.Meters WorldCoordinates
+        , point : Point2d Length.Meters Meshes.WorldCoordinates
         }
         ReadyModel
 pathSpec =
@@ -210,6 +204,13 @@ enemySpec : Ecs.Component.Spec Enemy ReadyModel
 enemySpec =
     { get = .enemyComponent
     , set = \enemyComponent world -> { world | enemyComponent = enemyComponent }
+    }
+
+
+targetSpec : Ecs.Component.Spec Ecs.Entity ReadyModel
+targetSpec =
+    { get = .targetComponent
+    , set = \targetComponent world -> { world | targetComponent = targetComponent }
     }
 
 
@@ -262,8 +263,8 @@ attackStyleSpec =
 type AttackAnimation
     = NoAttack
     | Attacking
-        { from : Point2d Length.Meters WorldCoordinates
-        , to : Point2d Length.Meters WorldCoordinates
+        { from : Point2d Length.Meters Meshes.WorldCoordinates
+        , to : Point2d Length.Meters Meshes.WorldCoordinates
         , duration : Duration
         }
 
@@ -289,7 +290,14 @@ init cfg =
         , onSuccess = MeshesLoaded
         }
         |> Tea.fromTuple
-        |> Tea.mapModel (\meshes -> Initializing { meshes = meshes, windowSize = Point2d.origin })
+        |> Tea.mapModel
+            (\meshes ->
+                Initializing
+                    { meshes = meshes
+                    , windowSize = Point2d.origin
+                    , level = Level.default
+                    }
+            )
         |> Tea.withCmd
             (Browser.Dom.getViewport
                 |> Task.map (\{ viewport } -> Point2d.pixels viewport.width viewport.height)
@@ -298,19 +306,38 @@ init cfg =
         |> Tea.map cfg
 
 
+initWithCachedMeshes :
+    { toMsg : Msg -> msg
+    , toModel : Model -> model
+    , currentTime : Time.Posix
+    , meshes : Meshes Meshes.WorldCoordinates
+    , windowSize : Point2d Pixels Meshes.ScreenCoordinates
+    , level : Level
+    }
+    -> Tea model msg
+initWithCachedMeshes cfg =
+    initReady
+        { currentTime = cfg.currentTime
+        , meshes = cfg.meshes
+        , windowSize = cfg.windowSize
+        , level = cfg.level
+        }
+        |> Tea.map cfg
+
+
 type Wave
     = FinalWave Int
     | NextWave Int Duration Wave
 
 
-createPlayer : ReadyModel -> ReadyModel
-createPlayer model =
+createTarget : Hex -> ReadyModel -> ReadyModel
+createTarget position model =
     model
         |> Ecs.Entity.create ecsConfigSpec
         |> Ecs.Entity.with ( thingToProtectAnimationSpec, Angle.turns 0 )
         |> Ecs.Entity.with ( healthSpec, { current = 100, max = 100 } )
         |> Ecs.Entity.with ( playerSpec, Player )
-        |> Ecs.Entity.with ( positionSpec, Hex.origin )
+        |> Ecs.Entity.with ( positionSpec, position )
         |> Tuple.second
 
 
@@ -360,6 +387,11 @@ createEnemy model =
             { model | seed = nextSeed }
 
         Just hex ->
+            let
+                nearest : Maybe ( List Hex, Ecs.Entity )
+                nearest =
+                    nearestTarget hex model
+            in
             { model | seed = nextSeed }
                 |> Ecs.Entity.create ecsConfigSpec
                 |> Ecs.Entity.with ( healthSpec, { current = 10, max = 10 } )
@@ -368,22 +400,56 @@ createEnemy model =
                 |> Ecs.Entity.with
                     ( pathSpec
                     , { path =
-                            findPath
-                                { from = hex
-                                , to = Hex.origin
-                                , tilemap = model.tilemap
-                                }
+                            nearest
+                                |> Maybe.map Tuple.first
+                                |> Maybe.withDefault []
                       , distance = 0
                       , point = Hex.toPoint2d hexMapLayout hex
                       }
                     )
+                |> Util.Maybe.apply
+                    (\( _, target ) ->
+                        Ecs.Entity.with ( targetSpec, target )
+                    )
+                    nearest
                 |> Tuple.second
+
+
+nearestTarget : Hex -> ReadyModel -> Maybe ( List Hex, Ecs.Entity )
+nearestTarget from model =
+    Ecs.System.indexedFoldl2
+        (\target _ targetPosition maybeNearest ->
+            case
+                findPath
+                    { from = from
+                    , to = targetPosition
+                    , tilemap = model.tilemap
+                    }
+            of
+                [] ->
+                    maybeNearest
+
+                path ->
+                    case maybeNearest of
+                        Nothing ->
+                            Just ( path, target )
+
+                        Just ( nearestPath, _ ) ->
+                            if List.length path < List.length nearestPath then
+                                Just ( path, target )
+
+                            else
+                                maybeNearest
+        )
+        model.playerComponent
+        model.positionComponent
+        Nothing
 
 
 findPath :
     { from : Hex
     , to : Hex
-    , tilemap : Hex.Map ( Scene3d.Entity WorldCoordinates, Maybe Ecs.Entity )
+    , tilemap : Hex.Map ( Scene3d.Entity Meshes.WorldCoordinates, Maybe Ecs.Entity )
     }
     -> List Hex
 findPath cfg =
@@ -434,7 +500,7 @@ createAttackTower position model =
         ( mesh, shadow ) =
             model.meshes.laserTower
 
-        translateBy : Vector3d Length.Meters WorldCoordinates
+        translateBy : Vector3d Length.Meters Meshes.WorldCoordinates
         translateBy =
             position
                 |> Hex.toPoint2d hexMapLayout
@@ -472,7 +538,7 @@ createWall position model =
         ( mesh, shadow ) =
             model.meshes.wall.core
 
-        translateBy : Vector3d Length.Meters WorldCoordinates
+        translateBy : Vector3d Length.Meters Meshes.WorldCoordinates
         translateBy =
             position
                 |> Hex.toPoint2d hexMapLayout
@@ -566,15 +632,15 @@ type alias Key =
 type Msg
     = Tick Time.Posix
     | KeyPressed Key
-    | Clicked (Point2d Pixels ScreenCoordinates)
-    | MouseMoved (Point2d Pixels ScreenCoordinates)
+    | Clicked (Point2d Pixels Meshes.ScreenCoordinates)
+    | MouseMoved (Point2d Pixels Meshes.ScreenCoordinates)
     | RotateCamera HandedDirection
     | TrapTypeSelected TrapType
-    | MeshesLoading (Meshes.LoadingMsg WorldCoordinates)
+    | MeshesLoading (Meshes.LoadingMsg Meshes.WorldCoordinates)
     | MeshesLoadFailed Http.Error
-    | MeshesLoaded (Meshes.RawMesh WorldCoordinates) (Meshes.RawMesh WorldCoordinates) (Meshes.RawMesh WorldCoordinates) (Meshes.EnemySphereRawMesh WorldCoordinates) (Meshes.WallRawMesh WorldCoordinates) (Meshes.ThingToProtectRawMesh WorldCoordinates)
-    | TimeInitialized (Meshes WorldCoordinates) Time.Posix
-    | WindowResized (Point2d Pixels ScreenCoordinates)
+    | MeshesLoaded (Meshes.RawMesh Meshes.WorldCoordinates) (Meshes.RawMesh Meshes.WorldCoordinates) (Meshes.RawMesh Meshes.WorldCoordinates) (Meshes.EnemySphereRawMesh Meshes.WorldCoordinates) (Meshes.WallRawMesh Meshes.WorldCoordinates) (Meshes.ThingToProtectRawMesh Meshes.WorldCoordinates)
+    | TimeInitialized (Meshes Meshes.WorldCoordinates) Time.Posix
+    | WindowResized (Point2d Pixels Meshes.ScreenCoordinates)
 
 
 type HandedDirection
@@ -653,6 +719,7 @@ updateInitializing cfg msg model =
                     { currentTime = currentTime
                     , meshes = meshes
                     , windowSize = model.windowSize
+                    , level = model.level
                     }
 
             WindowResized windowSize ->
@@ -668,8 +735,9 @@ updateInitializing cfg msg model =
 
 initReady :
     { currentTime : Time.Posix
-    , meshes : Meshes WorldCoordinates
-    , windowSize : Point2d Pixels ScreenCoordinates
+    , meshes : Meshes Meshes.WorldCoordinates
+    , windowSize : Point2d Pixels Meshes.ScreenCoordinates
+    , level : Level
     }
     -> Tea Model Msg
 initReady cfg =
@@ -677,10 +745,10 @@ initReady cfg =
         ( mesh, shadow ) =
             cfg.meshes.hexTile
 
-        to3dEntity : Hex -> Scene3d.Entity WorldCoordinates
+        to3dEntity : Hex -> Scene3d.Entity Meshes.WorldCoordinates
         to3dEntity hex =
             let
-                translateBy : Vector3d Length.Meters WorldCoordinates
+                translateBy : Vector3d Length.Meters Meshes.WorldCoordinates
                 translateBy =
                     hex
                         |> Hex.toPoint2d hexMapLayout
@@ -697,57 +765,76 @@ initReady cfg =
                 shadow
                 |> Scene3d.translateBy translateBy
 
-        tilemap : Hex.Map ( Scene3d.Entity WorldCoordinates, Maybe Ecs.Entity )
-        tilemap =
-            Hex.origin
-                |> Hex.circle 6
-                |> List.map (\hex -> ( Hex.toKey hex, ( to3dEntity hex, Nothing ) ))
-                |> Dict.fromList
-    in
-    { tilemap = tilemap
-    , highlightedTile = Nothing
-    , cameraEyePoint = Point3d.meters 25 0 35
-    , cameraRotation = { current = Angle.degrees 0, destination = Angle.degrees 0 }
-    , seed =
-        cfg.currentTime
-            |> Time.posixToMillis
-            |> Random.initialSeed
-    , lastTimestamp = cfg.currentTime
-    , currency = 500
-    , waves =
-        FinalWave 21
-            |> NextWave 13 (Duration.seconds 10)
-            |> NextWave 11 (Duration.seconds 10)
-            |> NextWave 7 (Duration.seconds 10)
-            |> NextWave 5 (Duration.seconds 10)
-            |> NextWave 3 (Duration.seconds 10)
-            |> NextWave 2 (Duration.seconds 10)
-            |> Just
-    , tillNextWave =
-        Just
-            { initial = Duration.seconds 1
-            , remaining = Duration.seconds 1
-            }
-    , trapType = AttackTower
-    , meshes = cfg.meshes
-    , windowSize = cfg.windowSize
+        levelMap : Hex.Map (Maybe Level.Prop)
+        levelMap =
+            cfg.level
+                |> Level.toMap
 
-    -- ECS
-    , ecsConfig = Ecs.Config.init
-    , staticMeshComponent = Ecs.Component.empty
-    , thingToProtectAnimationComponent = Ecs.Component.empty
-    , positionComponent = Ecs.Component.empty
-    , healthComponent = Ecs.Component.empty
-    , pathComponent = Ecs.Component.empty
-    , playerComponent = Ecs.Component.empty
-    , enemyComponent = Ecs.Component.empty
-    , trapComponent = Ecs.Component.empty
-    , delayComponent = Ecs.Component.empty
-    , attackStyleComponent = Ecs.Component.empty
-    , attackAnimationComponent = Ecs.Component.empty
-    , wallComponent = Ecs.Component.empty
-    }
-        |> createPlayer
+        tilemap : Hex.Map ( Scene3d.Entity Meshes.WorldCoordinates, Maybe Ecs.Entity )
+        tilemap =
+            levelMap
+                |> Dict.map (\key _ -> ( to3dEntity (Hex.fromKey key), Nothing ))
+    in
+    Dict.foldl
+        (\key maybeProp ->
+            case maybeProp of
+                Nothing ->
+                    identity
+
+                Just Level.Target ->
+                    createTarget (Hex.fromKey key)
+
+                Just Level.Wall ->
+                    identity
+
+                Just Level.Spawner ->
+                    identity
+        )
+        { tilemap = tilemap
+        , highlightedTile = Nothing
+        , cameraEyePoint = Point3d.meters 25 0 35
+        , cameraRotation = { current = Angle.degrees 0, destination = Angle.degrees 0 }
+        , seed =
+            cfg.currentTime
+                |> Time.posixToMillis
+                |> Random.initialSeed
+        , lastTimestamp = cfg.currentTime
+        , currency = 500
+        , waves =
+            FinalWave 21
+                |> NextWave 13 (Duration.seconds 10)
+                |> NextWave 11 (Duration.seconds 10)
+                |> NextWave 7 (Duration.seconds 10)
+                |> NextWave 5 (Duration.seconds 10)
+                |> NextWave 3 (Duration.seconds 10)
+                |> NextWave 2 (Duration.seconds 10)
+                |> Just
+        , tillNextWave =
+            Just
+                { initial = Duration.seconds 1
+                , remaining = Duration.seconds 1
+                }
+        , trapType = AttackTower
+        , meshes = cfg.meshes
+        , windowSize = cfg.windowSize
+
+        -- ECS
+        , ecsConfig = Ecs.Config.init
+        , staticMeshComponent = Ecs.Component.empty
+        , thingToProtectAnimationComponent = Ecs.Component.empty
+        , positionComponent = Ecs.Component.empty
+        , healthComponent = Ecs.Component.empty
+        , pathComponent = Ecs.Component.empty
+        , playerComponent = Ecs.Component.empty
+        , enemyComponent = Ecs.Component.empty
+        , trapComponent = Ecs.Component.empty
+        , delayComponent = Ecs.Component.empty
+        , attackStyleComponent = Ecs.Component.empty
+        , attackAnimationComponent = Ecs.Component.empty
+        , wallComponent = Ecs.Component.empty
+        , targetComponent = Ecs.Component.empty
+        }
+        levelMap
         |> Ready
         |> Tea.save
 
@@ -806,7 +893,7 @@ updateReady cfg msg model =
 
                 MouseMoved screenPoint ->
                     let
-                        maybeClickedPoint : Maybe (Point3d Length.Meters WorldCoordinates)
+                        maybeClickedPoint : Maybe (Point3d Length.Meters Meshes.WorldCoordinates)
                         maybeClickedPoint =
                             Camera3d.ray
                                 (defaultCamera model.cameraRotation.current model.cameraEyePoint)
@@ -843,7 +930,7 @@ updateReady cfg msg model =
 
                 Clicked screenPoint ->
                     let
-                        maybeClickedPoint : Maybe (Point3d Length.Meters WorldCoordinates)
+                        maybeClickedPoint : Maybe (Point3d Length.Meters Meshes.WorldCoordinates)
                         maybeClickedPoint =
                             Camera3d.ray
                                 (defaultCamera model.cameraRotation.current model.cameraEyePoint)
@@ -917,7 +1004,7 @@ rotateCamera handedDirection model =
     }
 
 
-screenRectangle : Rectangle2d Pixels ScreenCoordinates
+screenRectangle : Rectangle2d Pixels Meshes.ScreenCoordinates
 screenRectangle =
     Rectangle2d.with
         { x1 = Pixels.pixels 0
@@ -954,14 +1041,14 @@ updateWallSections model =
         ( meshSectionNW, shadowSectionNW ) =
             model.meshes.wall.southWest
 
-        translateBy : Hex -> Vector3d Length.Meters WorldCoordinates
+        translateBy : Hex -> Vector3d Length.Meters Meshes.WorldCoordinates
         translateBy position =
             position
                 |> Hex.toPoint2d hexMapLayout
                 |> Point3d.on SketchPlane3d.xy
                 |> Vector3d.from Point3d.origin
 
-        toMaybeSection : Hex -> Hex.Direction -> Scene3d.Mesh.Textured WorldCoordinates -> Scene3d.Mesh.Shadow WorldCoordinates -> ReadyModel -> Maybe (Scene3d.Entity WorldCoordinates)
+        toMaybeSection : Hex -> Hex.Direction -> Scene3d.Mesh.Textured Meshes.WorldCoordinates -> Scene3d.Mesh.Shadow Meshes.WorldCoordinates -> ReadyModel -> Maybe (Scene3d.Entity Meshes.WorldCoordinates)
         toMaybeSection position direction mesh shadow mdl =
             position
                 |> Hex.neighbor direction
@@ -985,7 +1072,7 @@ updateWallSections model =
     Ecs.System.indexedFoldl3
         (\wallEntity position _ _ nextModel ->
             let
-                updatedEntity3d : Scene3d.Entity WorldCoordinates
+                updatedEntity3d : Scene3d.Entity Meshes.WorldCoordinates
                 updatedEntity3d =
                     [ toMaybeSection position Hex.NorthEast meshSectionNE shadowSectionNE nextModel
                     , toMaybeSection position Hex.East meshSectionE shadowSectionE nextModel
@@ -1031,37 +1118,77 @@ updatePaths hexNowWithEntity model =
 
                         else
                             let
-                                newPath : List Hex
-                                newPath =
-                                    firstHex
-                                        :: secondHex
-                                        :: findPath
-                                            { from = secondHex
-                                            , to = Hex.origin
-                                            , tilemap = nextModel.tilemap
-                                            }
+                                targetHex : Maybe Hex
+                                targetHex =
+                                    Ecs.Component.get pathingEntity nextModel.targetComponent
+                                        |> Maybe.andThen (\target -> Ecs.Component.get target nextModel.positionComponent)
                             in
-                            Util.Ecs.Component.set
-                                pathSpec
-                                pathingEntity
-                                { path = newPath
-                                , distance = distance
-                                , point =
-                                    case newPath of
-                                        [] ->
-                                            position
-                                                |> Hex.toPoint2d hexMapLayout
+                            case targetHex of
+                                Nothing ->
+                                    case nearestTarget position nextModel of
+                                        Nothing ->
+                                            nextModel
 
-                                        [ oneHex ] ->
-                                            Hex.toPoint2d hexMapLayout oneHex
+                                        Just ( newPath, newTargetEntity ) ->
+                                            Util.Ecs.Component.set
+                                                pathSpec
+                                                pathingEntity
+                                                { path = newPath
+                                                , distance = distance
+                                                , point =
+                                                    case newPath of
+                                                        [] ->
+                                                            position
+                                                                |> Hex.toPoint2d hexMapLayout
 
-                                        newFirstHex :: newSecondHex :: _ ->
-                                            Point2d.interpolateFrom
-                                                (Hex.toPoint2d hexMapLayout newFirstHex)
-                                                (Hex.toPoint2d hexMapLayout newSecondHex)
-                                                distance
-                                }
-                                nextModel
+                                                        [ oneHex ] ->
+                                                            Hex.toPoint2d hexMapLayout oneHex
+
+                                                        newFirstHex :: newSecondHex :: _ ->
+                                                            Point2d.interpolateFrom
+                                                                (Hex.toPoint2d hexMapLayout newFirstHex)
+                                                                (Hex.toPoint2d hexMapLayout newSecondHex)
+                                                                distance
+                                                }
+                                                nextModel
+                                                |> Util.Ecs.Component.set
+                                                    targetSpec
+                                                    pathingEntity
+                                                    newTargetEntity
+
+                                Just target ->
+                                    let
+                                        newPath : List Hex
+                                        newPath =
+                                            firstHex
+                                                :: secondHex
+                                                :: findPath
+                                                    { from = secondHex
+                                                    , to = target
+                                                    , tilemap = nextModel.tilemap
+                                                    }
+                                    in
+                                    Util.Ecs.Component.set
+                                        pathSpec
+                                        pathingEntity
+                                        { path = newPath
+                                        , distance = distance
+                                        , point =
+                                            case newPath of
+                                                [] ->
+                                                    position
+                                                        |> Hex.toPoint2d hexMapLayout
+
+                                                [ oneHex ] ->
+                                                    Hex.toPoint2d hexMapLayout oneHex
+
+                                                newFirstHex :: newSecondHex :: _ ->
+                                                    Point2d.interpolateFrom
+                                                        (Hex.toPoint2d hexMapLayout newFirstHex)
+                                                        (Hex.toPoint2d hexMapLayout newSecondHex)
+                                                        distance
+                                        }
+                                        nextModel
 
                     _ ->
                         nextModel
@@ -1298,7 +1425,7 @@ moveEnemy deltaTime =
                             totalDistance
                                 |> Basics.Extra.fractionalModBy 1.0
 
-                        pointAlong : Point2d Length.Meters WorldCoordinates
+                        pointAlong : Point2d Length.Meters Meshes.WorldCoordinates
                         pointAlong =
                             Point2d.interpolateFrom
                                 (Hex.toPoint2d hexMapLayout currentHex)
@@ -1628,10 +1755,10 @@ viewReady model =
     ]
 
 
-defaultCamera : Angle -> Point3d Length.Meters WorldCoordinates -> Camera3d Length.Meters WorldCoordinates
+defaultCamera : Angle -> Point3d Length.Meters Meshes.WorldCoordinates -> Camera3d Length.Meters Meshes.WorldCoordinates
 defaultCamera rotation eyePoint =
     let
-        cameraViewpoint : Viewpoint3d Length.Meters WorldCoordinates
+        cameraViewpoint : Viewpoint3d Length.Meters Meshes.WorldCoordinates
         cameraViewpoint =
             Viewpoint3d.lookAt
                 { eyePoint =
@@ -1679,7 +1806,7 @@ decodeMouseMove =
         (Json.Decode.field "offsetY" Json.Decode.float)
 
 
-viewAttacks3d : ReadyModel -> List (Scene3d.Entity WorldCoordinates)
+viewAttacks3d : ReadyModel -> List (Scene3d.Entity Meshes.WorldCoordinates)
 viewAttacks3d model =
     Ecs.System.foldl2
         (\animation style acc ->
@@ -1691,13 +1818,13 @@ viewAttacks3d model =
                     case style of
                         Laser ->
                             let
-                                from3d : Point3d Length.Meters WorldCoordinates
+                                from3d : Point3d Length.Meters Meshes.WorldCoordinates
                                 from3d =
                                     from
                                         |> Point3d.on SketchPlane3d.xy
                                         |> Point3d.translateIn Direction3d.positiveZ (Length.meters 3.5)
 
-                                to3d : Point3d Length.Meters WorldCoordinates
+                                to3d : Point3d Length.Meters Meshes.WorldCoordinates
                                 to3d =
                                     to
                                         |> Point3d.on SketchPlane3d.xy
@@ -1714,7 +1841,7 @@ viewAttacks3d model =
         []
 
 
-viewEnemies3d : ReadyModel -> List (Scene3d.Entity WorldCoordinates)
+viewEnemies3d : ReadyModel -> List (Scene3d.Entity Meshes.WorldCoordinates)
 viewEnemies3d model =
     let
         ( meshCore, shadowCore ) =
@@ -1726,13 +1853,13 @@ viewEnemies3d model =
     Ecs.System.foldl2
         (\{ point, distance } _ acc ->
             let
-                translateBy : Vector3d Length.Meters WorldCoordinates
+                translateBy : Vector3d Length.Meters Meshes.WorldCoordinates
                 translateBy =
                     originPosition
                         |> Point3d.translateIn Direction3d.positiveZ (Length.meters 1.5)
                         |> Vector3d.from Point3d.origin
 
-                originPosition : Point3d Length.Meters WorldCoordinates
+                originPosition : Point3d Length.Meters Meshes.WorldCoordinates
                 originPosition =
                     point
                         |> Point3d.on SketchPlane3d.xy
@@ -1769,7 +1896,7 @@ viewEnemies3d model =
         []
 
 
-viewThingsToProtect3d : ReadyModel -> List (Scene3d.Entity WorldCoordinates)
+viewThingsToProtect3d : ReadyModel -> List (Scene3d.Entity Meshes.WorldCoordinates)
 viewThingsToProtect3d model =
     let
         ( meshCore, shadowCore ) =
@@ -1787,19 +1914,19 @@ viewThingsToProtect3d model =
     Ecs.System.foldl2
         (\position turns acc ->
             let
-                translateBy : Vector3d Length.Meters WorldCoordinates
+                translateBy : Vector3d Length.Meters Meshes.WorldCoordinates
                 translateBy =
                     originPosition
                         |> Vector3d.from Point3d.origin
 
-                originPosition : Point3d Length.Meters WorldCoordinates
+                originPosition : Point3d Length.Meters Meshes.WorldCoordinates
                 originPosition =
                     position
                         |> Hex.toPoint2d hexMapLayout
                         |> Point3d.on SketchPlane3d.xy
                         |> Point3d.translateIn Direction3d.positiveZ (Length.meters 2)
 
-                core3d : Scene3d.Entity WorldCoordinates
+                core3d : Scene3d.Entity Meshes.WorldCoordinates
                 core3d =
                     Scene3d.meshWithShadow
                         (Scene3d.Material.metal
@@ -1811,7 +1938,7 @@ viewThingsToProtect3d model =
                         shadowCore
                         |> Scene3d.translateBy translateBy
 
-                ringInner3d : Scene3d.Entity WorldCoordinates
+                ringInner3d : Scene3d.Entity Meshes.WorldCoordinates
                 ringInner3d =
                     Scene3d.meshWithShadow
                         (Scene3d.Material.metal
@@ -1828,7 +1955,7 @@ viewThingsToProtect3d model =
                             )
                             turns
 
-                ringMiddle3d : Scene3d.Entity WorldCoordinates
+                ringMiddle3d : Scene3d.Entity Meshes.WorldCoordinates
                 ringMiddle3d =
                     Scene3d.meshWithShadow
                         (Scene3d.Material.metal
@@ -1845,7 +1972,7 @@ viewThingsToProtect3d model =
                             )
                             turns
 
-                ringOuter3d : Scene3d.Entity WorldCoordinates
+                ringOuter3d : Scene3d.Entity Meshes.WorldCoordinates
                 ringOuter3d =
                     Scene3d.meshWithShadow
                         (Scene3d.Material.metal
@@ -1873,21 +2000,21 @@ viewThingsToProtect3d model =
         []
 
 
-viewStaticMeshes : ReadyModel -> List (Scene3d.Entity WorldCoordinates)
+viewStaticMeshes : ReadyModel -> List (Scene3d.Entity Meshes.WorldCoordinates)
 viewStaticMeshes model =
     Ecs.System.foldl (::)
         model.staticMeshComponent
         []
 
 
-viewHexGridMap3d : Hex.Map ( Scene3d.Entity WorldCoordinates, Maybe Ecs.Entity ) -> List (Scene3d.Entity WorldCoordinates)
+viewHexGridMap3d : Hex.Map ( Scene3d.Entity Meshes.WorldCoordinates, Maybe Ecs.Entity ) -> List (Scene3d.Entity Meshes.WorldCoordinates)
 viewHexGridMap3d hexMap =
     hexMap
         |> Dict.values
         |> List.map Tuple.first
 
 
-viewHighlightedTile3d : Maybe Hex -> Meshes.MeshAndShadow WorldCoordinates -> List (Scene3d.Entity WorldCoordinates)
+viewHighlightedTile3d : Maybe Hex -> Meshes.MeshAndShadow Meshes.WorldCoordinates -> List (Scene3d.Entity Meshes.WorldCoordinates)
 viewHighlightedTile3d maybeHighlitedHex ( mesh, _ ) =
     case maybeHighlitedHex of
         Nothing ->
@@ -1895,7 +2022,7 @@ viewHighlightedTile3d maybeHighlitedHex ( mesh, _ ) =
 
         Just highlightedHex ->
             let
-                translateBy : Vector3d Length.Meters WorldCoordinates
+                translateBy : Vector3d Length.Meters Meshes.WorldCoordinates
                 translateBy =
                     highlightedHex
                         |> Hex.toPoint2d hexMapLayout

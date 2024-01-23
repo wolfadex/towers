@@ -6,10 +6,12 @@ module Meshes exposing
     , Meshes
     , Model
     , RawMesh
+    , ScreenCoordinates
     , ThingToProtectMeshAndShadow
     , ThingToProtectRawMesh
     , WallMeshAndShadow
     , WallRawMesh
+    , WorldCoordinates
     , fromRaw
     , init
     , update
@@ -27,6 +29,14 @@ import Task.Parallel
 import TriangularMesh exposing (TriangularMesh)
 import Util.Obj.Decode
 import Vector3d exposing (Vector3d)
+
+
+type ScreenCoordinates
+    = ScreenCoordinates Never
+
+
+type WorldCoordinates
+    = WorldCoordinates Never
 
 
 type alias Meshes coordinates =
