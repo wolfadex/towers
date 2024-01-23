@@ -56,6 +56,7 @@ config =
             [ "src/Hex.elm"
             , "src/Css/Color.elm"
             , "src/Tea.elm"
+            , "src/Input.elm"
             ]
     , NoUnused.Parameters.rule
     , NoUnused.Patterns.rule

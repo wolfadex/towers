@@ -123,6 +123,7 @@ type alias ReadyModel =
     , attackAnimationComponent : Ecs.Component AttackAnimation
     , wallComponent : Ecs.Component Wall
     , targetComponent : Ecs.Component Ecs.Entity
+    , spawnerComponent : Ecs.Component Spawner
     }
 
 
@@ -204,6 +205,17 @@ enemySpec : Ecs.Component.Spec Enemy ReadyModel
 enemySpec =
     { get = .enemyComponent
     , set = \enemyComponent world -> { world | enemyComponent = enemyComponent }
+    }
+
+
+type Spawner
+    = Spawner
+
+
+spawnerSpec : Ecs.Component.Spec Spawner ReadyModel
+spawnerSpec =
+    { get = .spawnerComponent
+    , set = \spawnerComponent world -> { world | spawnerComponent = spawnerComponent }
     }
 
 
@@ -341,42 +353,29 @@ createTarget position model =
         |> Tuple.second
 
 
+createSpawner : Hex -> ReadyModel -> ReadyModel
+createSpawner position model =
+    model
+        |> Ecs.Entity.create ecsConfigSpec
+        |> Ecs.Entity.with ( spawnerSpec, Spawner )
+        |> Ecs.Entity.with ( positionSpec, position )
+        |> Tuple.second
+
+
 createEnemy : ReadyModel -> ReadyModel
 createEnemy model =
     let
-        edgeHexes : List Hex
-        edgeHexes =
-            model.tilemap
-                |> Dict.keys
-                |> List.filterMap
-                    (\key ->
-                        let
-                            hex : Hex
-                            hex =
-                                Hex.fromKey key
-
-                            nbrs : Int
-                            nbrs =
-                                hex
-                                    |> Hex.neighbors
-                                    |> List.filterMap
-                                        (\neighbor ->
-                                            Dict.get
-                                                (Hex.toKey neighbor)
-                                                model.tilemap
-                                        )
-                                    |> List.length
-                        in
-                        if nbrs < 6 then
-                            Just hex
-
-                        else
-                            Nothing
-                    )
+        spawnerHexes : List Hex
+        spawnerHexes =
+            Ecs.System.foldl2
+                (\_ position -> (::) position)
+                model.spawnerComponent
+                model.positionComponent
+                []
 
         ( maybeHex, nextSeed ) =
             Random.step
-                (edgeHexes
+                (spawnerHexes
                     |> Random.List.choose
                     |> Random.map Tuple.first
                 )
@@ -788,7 +787,7 @@ initReady cfg =
                     identity
 
                 Just Level.Spawner ->
-                    identity
+                    createSpawner (Hex.fromKey key)
         )
         { tilemap = tilemap
         , highlightedTile = Nothing
@@ -833,6 +832,7 @@ initReady cfg =
         , attackAnimationComponent = Ecs.Component.empty
         , wallComponent = Ecs.Component.empty
         , targetComponent = Ecs.Component.empty
+        , spawnerComponent = Ecs.Component.empty
         }
         levelMap
         |> Ready

@@ -1,4 +1,26 @@
-module Input exposing (Key(..), Keyboard(..), decodeKey, init, isPressed, keyDown, keyUp, newKey, withControl, withShift)
+module Input exposing
+    ( Key(..), Keyboard(..)
+    , init
+    , keyDown, keyUp
+    , decodeKey
+    , newKey
+    , withAlt, withControl, withShift
+    , isPressed
+    )
+
+{-|
+
+@docs Key, Keyboard
+@docs init
+@docs keyDown, keyUp
+
+@docs decodeKey
+
+@docs newKey
+@docs withAlt, withControl, withShift
+@docs isPressed
+
+-}
 
 import Json.Decode
 import Set exposing (Set)
